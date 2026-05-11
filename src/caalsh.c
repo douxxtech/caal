@@ -249,6 +249,7 @@ int main(void) {
      * container state. We use execv here so crun delete takes over this
      * process directly, no need to wait on a child for cleanup.
      */
+    unlink(sock_path);
     umount(rootfs);
     umount(tmp_dir);
     rmdir(tmp_dir);

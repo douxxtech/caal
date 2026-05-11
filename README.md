@@ -47,12 +47,13 @@ The setup script handles installing all of these automatically on supported dist
 ## Installation
 
 ```bash
+# one-liner:
+curl -sSL caal.douxx.tech/get | sudo bash
+
+# or
 git clone https://github.com/douxxtech/caal
 cd caal
 sudo bash scripts/setup.sh
-
-# or, one-liner:
-curl -sSL caal.douxx.tech/get | sudo bash
 ```
 
 The setup script will:

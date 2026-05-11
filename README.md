@@ -134,6 +134,10 @@ umoci unpack --image /tmp/alpine-oci:latest /opt/caal/bundles/alpine
 
 The bundle directory must follow the [OCI Runtime Bundle spec](https://github.com/opencontainers/runtime-spec/blob/main/bundle.md): a `config.json` and a `rootfs/` directory.
 
+> [!NOTE]
+> Umoci default bundles have a very minimal setup. It is recommended to heavily modify them to ensure correct permissions (in the container and on the host), and resources management.  
+> The OCI config file is the following: `/opt/caal/bundles/<image>/config.json`
+
 ## Security Notes
 
 - CaaLsh **clears the entire environment** before launching the container – nothing from the SSH session leaks in

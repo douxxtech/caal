@@ -207,7 +207,9 @@ Match User $username
     AllowAgentForwarding no
     AllowTcpForwarding no
     X11Forwarding no
-    Banner none
+    PermitTunnel no
+    PermitTTY yes
+    PermitUserRC no
     ForceCommand $CAALSH_PATH
 EOF
 

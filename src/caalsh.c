@@ -1,3 +1,21 @@
+/*
+ * CaaLsh - Container as a Login Shell
+ * Copyright (C) 2026 douxxtech
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <pwd.h>
@@ -15,9 +33,11 @@
 #include "config.h"
 #include "lib/tomlc17.h"
 
-/* pid of the crun child, used by the signal handler */
+/* crun child pid, needs to be global so the signal handler can reach it */
 static pid_t child_pid = -1;
 
+/* SIGALRM handler, fires when the session timeout expires and kills the child
+ */
 static void on_alarm(int sig) {
     (void)sig;
     if (child_pid > 0)
@@ -25,10 +45,7 @@ static void on_alarm(int sig) {
 }
 
 int main(void) {
-    /*
-     * Resolve who is logging in
-     * getpwuid(getuid()) reads directly from /etc/passwd
-     */
+    /* Figure out who we are */
     struct passwd *pw = getpwuid(getuid());
     if (pw == NULL) {
         write(STDERR_FILENO, "[CaaLsh] could not resolve user\n", 30);
@@ -36,15 +53,16 @@ int main(void) {
     }
     const char *username = pw->pw_name;
 
-    /* guard against long usernames before we use it in snprintf */
+    /* sanity cap before we use username in any snprintf below */
     if (strlen(username) > 32) {
         write(STDERR_FILENO, "[CaaLsh] username too long\n", 25);
         return 1;
     }
 
     /*
-     * Parse /etc/caal/caal.toml and look up [<username>].
-     * If the user has no entry, we refuse the login entirely.
+     * Open and parse the main config file;
+     * Every user that is allowed to log in must have a section in there.
+     * No section = No access
      */
     FILE *fp = fopen(CONFIG_PATH, "r");
     if (fp == NULL) {
@@ -59,7 +77,10 @@ int main(void) {
         return 1;
     }
 
-    /* look up [<username>].bundle via dot-path */
+    /*
+     * Look up [username].bundle using dot path syntax.
+     * This is the OCI bundle directory crun will be pointed at
+     */
     char seek_path[128];
     snprintf(seek_path, sizeof(seek_path), "%s.bundle", username);
 
@@ -78,14 +99,14 @@ int main(void) {
 
     const char *bundle_path = bundle_datum.u.s;
 
-    /* reject relative paths */
+    /* relative paths are a footgun, require absolute only */
     if (bundle_path[0] != '/') {
         write(STDERR_FILENO, "[CaaLsh] bundle path must be absolute\n", 36);
         toml_free(config);
         return 1;
     }
 
-    /* check enabled flag  */
+    /* Check the enabled flag. If it is explicitly set to false we bail out */
     char enabled_path[128];
     snprintf(enabled_path, sizeof(enabled_path), "%s.enabled", username);
     toml_datum_t enabled_datum = toml_seek(config.toptab, enabled_path);
@@ -95,7 +116,10 @@ int main(void) {
         return 1;
     }
 
-    /* check timeout */
+    /*
+     * Read the session timeout in seconds.
+     * Zero or missing means no timeout
+     */
     char timeout_path[128];
     snprintf(timeout_path, sizeof(timeout_path), "%s.timeout", username);
     toml_datum_t timeout_datum = toml_seek(config.toptab, timeout_path);
@@ -104,9 +128,9 @@ int main(void) {
         timeout = timeout_datum.u.int64;
 
     /*
-     * Nuke the entire environment
-     * We don't want anything the SSH client or sshd injected to survive into
-     * crun
+     * Nuke the entire environment before we launch crun.
+     * We dont want any SSH injected vars or sshd state leaking into
+     * the container.
      */
     if (clearenv() != 0) {
         write(STDERR_FILENO, "[CaaLsh] clearenv failed\n", 23);
@@ -115,8 +139,8 @@ int main(void) {
     }
 
     /*
-     * Give crun the bare minimum env it needs.
-     * Do NOT forward anything from the original env.
+     * Give crun the bare minimum it needs to run.
+     * Nothing from the original env survives past this point.
      */
     if (setenv("PATH",
                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -126,18 +150,18 @@ int main(void) {
         return 1;
     }
 
-    /*
-     * Build a unique container ID
-     * PID + timestamp to avoid collisions
-     */
+    /* Build a unique container ID using our PID and current timestamp */
     char container_id[64];
     snprintf(container_id, sizeof(container_id), "caalsh-%d-%ld", (int)getpid(),
              (long)time(NULL));
 
     /*
-     * Set up a tmpfs for this session's overlay scratch space
-     * upper: writes go here, work: required dir for overlayfs
-     * The tmpfs is unmounted after the session ends, wiping everything away
+     * Set up the per session overlay filesystem.
+     *
+     * We mount a tmpfs under /tmp/<container_id> and use it as the overlay
+     * scratch space. upper gets all the writes, work is required by overlayfs.
+     * When the session ends everything is unmounted and the tmpfs vanishes,
+     * so the container rootfs is always clean for the next login.
      */
     char tmp_dir[96], upper[128], work[128], rootfs[128], overlay_opts[512];
     snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/%s", container_id);
@@ -160,14 +184,17 @@ int main(void) {
     }
 
     /*
-     * Fork so the parent can clean up the container after the session ends.
-     * The child execs into crun and becomes the container process.
-     * The parent waits, then runs `crun delete --force` to wipe the state.
+     * Fork here. The child execs into crun and becomes the container process.
+     * The parent waits for it to finish, then handles cleanup (unmounts,
+     * tmpfs removal, crun delete).
+     *
+     * We do it this way instead of just execv so we can always run cleanup,
+     * regardless of how the session ends.
      */
     pid_t pid = fork();
 
     if (pid == 0) {
-        /* becomes crun */
+        /* child: hand off to crun, we are done here */
         char *const argv[] = {CRUN_PATH,           "run",        "--bundle",
                               (char *)bundle_path, container_id, NULL};
         execv(CRUN_PATH, argv);
@@ -179,7 +206,10 @@ int main(void) {
         return 1;
     }
 
-    /* arm the timeout if configured, then wait */
+    /*
+     * Parent: arm the timeout alarm if one was configured, then block on the
+     * child. SIGALRM will fire on_alarm which kills the child if it overstays.
+     */
     child_pid = pid;
     if (timeout > 0) {
         signal(SIGALRM, on_alarm);
@@ -187,14 +217,18 @@ int main(void) {
     }
 
     waitpid(pid, NULL, 0);
-    alarm(0); /* cancel any pending alarm if session ended naturally */
+    alarm(0); /* session ended naturally, cancel any pending alarm */
 
-    /* unmount overlay, then tmpfs */
+    /*
+     * Cleanup time. Tear down the overlay and tmpfs in reverse order, then
+     * remove the now empty tmpdir. Finally exec into crun delete to wipe the
+     * container state. We use execv here so crun delete takes over this
+     * process directly, no need to wait on a child for cleanup.
+     */
     umount(rootfs);
     umount(tmp_dir);
     rmdir(tmp_dir);
 
-    /* delete the container */
     char *const del_argv[] = {CRUN_PATH, "delete", "--force", container_id,
                               NULL};
     execv(CRUN_PATH, del_argv);

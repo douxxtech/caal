@@ -6,7 +6,7 @@ CFLAGS ?= -O2 -Wall -Wextra -pedantic
 PREFIX ?= /usr/local
 
 SRC_DIR = src
-SRC = $(SRC_DIR)/caalsh.c $(SRC_DIR)/lib/tomlc17.c
+SRC = $(SRC_DIR)/caalsh.c $(SRC_DIR)/lib/tomlc17.c $(SRC_DIR)/lib/pty_bridge.c
 OBJ = caalsh
 
 NEWCAAL_SRC = scripts/newcaal.sh

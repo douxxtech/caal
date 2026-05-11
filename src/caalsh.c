@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -31,6 +32,7 @@
 #include <unistd.h>
 
 #include "config.h"
+#include "lib/pty_bridge.h"
 #include "lib/tomlc17.h"
 
 /* crun child pid, needs to be global so the signal handler can reach it */
@@ -139,7 +141,7 @@ int main(void) {
     }
 
     /*
-     * Give crun the bare minimum it needs to run.
+     * Give crun the minimum it needs to run.
      * Nothing from the original env survives past this point.
      */
     if (setenv("PATH",
@@ -183,6 +185,15 @@ int main(void) {
         return 1;
     }
 
+    /* set up the console socket so crun can hand us the PTY master */
+    char sock_path[108];
+    int sock_fd = pty_bridge_init(sock_path, sizeof(sock_path));
+    if (sock_fd < 0) {
+        write(STDERR_FILENO, "[CaaLsh] pty_bridge_init failed\n", 30);
+        toml_free(config);
+        return 1;
+    }
+
     /*
      * Fork here. The child execs into crun and becomes the container process.
      * The parent waits for it to finish, then handles cleanup (unmounts,
@@ -195,8 +206,9 @@ int main(void) {
 
     if (pid == 0) {
         /* child: hand off to crun, we are done here */
-        char *const argv[] = {CRUN_PATH,           "run",        "--bundle",
-                              (char *)bundle_path, container_id, NULL};
+        char *const argv[] = {
+            CRUN_PATH,          "run",     "--bundle",   (char *)bundle_path,
+            "--console-socket", sock_path, container_id, NULL};
         execv(CRUN_PATH, argv);
         write(STDERR_FILENO, "[CaaLsh] exec failed\n", 19);
         _exit(1);
@@ -216,7 +228,19 @@ int main(void) {
         alarm((unsigned int)timeout);
     }
 
-    waitpid(pid, NULL, 0);
+    child_pid = pid;
+    if (timeout > 0) {
+        signal(SIGALRM, on_alarm);
+        alarm((unsigned int)timeout);
+    }
+
+    int master_fd = pty_bridge_recv(sock_fd);
+    if (master_fd < 0) {
+        write(STDERR_FILENO, "[CaaLsh] pty_bridge_recv failed\n", 30);
+    } else {
+        pty_bridge_run(master_fd, pid);
+    }
+
     alarm(0); /* session ended naturally, cancel any pending alarm */
 
     /*

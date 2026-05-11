@@ -1,19 +1,34 @@
-# CaaL – Container as a Login
+<div align="center">
 
-CaaL solves a recurring problem: needing a temporary, clean, isolated environment – to test software, sandbox remote users, or hand someone a shell without touching your host system. Until now, popular solutions were either resource-intensive, complicated to deploy, or simply overkill. CaaL only requires two things: a host machine and an internet connection. One SSH command later, you get a fresh container environment, and it vanishes completely on session exit.
+# CaaL – Container as a Login
+[Install](#installation) · [Configuration](#configuration) · [Help](#need-help-) · [Website](https://caal.douxx.tech)
+
+</div>
+
+> CaaL provides disposable SSH login environments using OCI containers. Users connect with a normal SSH client and get a fresh, isolated shell that is destroyed when the session ends. No VMs, no persistent state, and minimal host setup required.
 
 ## How It Works
 
 When a user logs in via SSH, their shell is replaced by **CaaLsh** (Container as a Login Shell) – a small C binary that:
 
-1. Reads the configuration and looks up the connecting user
-2. Clears the entire environment (no SSH vars, no host state leaks in)
-3. Mounts a per-session **overlay filesystem** over the container's rootfs, backed by a tmpfs – writes go there, the base image stays untouched
-4. Execs **[crun](https://github.com/containers/crun)** to start the OCI container
-5. Optionally enforces a **session timeout** (kills the container after N seconds)
-6. On exit, tears down the overlay, wipes the tmpfs, and runs `crun delete` – the host is left exactly as it was
+1. Clears the entire environment (no SSH vars, no host state leaks in)
+2. Mounts a per-session **overlay filesystem** over the container's rootfs, backed by a tmpfs – writes go there, the base image stays untouched
+3. Execs **[crun](https://github.com/containers/crun)** to start the OCI container
+4. Optionally enforces a **session timeout** (kills the container after N seconds)
+5. On exit, tears down the overlay, and wipes the tmpfs – the host is left exactly as it was
 
 Each session is fully ephemeral: nothing persists between logins.
+
+## Use Cases
+
+CaaL is useful for:
+- disposable SSH lab environments
+- student shells
+- honeypots
+- shared demo systems
+- temporary contractor access
+- isolated CI/debug environments
+- SSH access without persistent host accounts
 
 ## Requirements
 
@@ -121,6 +136,9 @@ The bundle directory must follow the [OCI Runtime Bundle spec](https://github.co
 - The SSH drop-in written by `newcaal` disables agent forwarding, TCP forwarding, and X11 for the user
 - Users are created with `/tmp` as their home directory – they have no persistent home on the host
 - CaaLsh must be **setuid root** (or run as root) to perform mounts – the Makefile handles this
+
+## Need Help ?
+Have an issue running CaaL ? Feel free to open a new [issue](https://github.com/douxxtech/caal/issues/new/)
 
 ## License
 

@@ -32,6 +32,10 @@ CaaL is useful for:
 
 ## Requirements
 
+> [!WARNING]
+> `caalsh` requires root privileges (setuid or direct root execution)
+> to perform mounts and launch containers.
+
 - Linux host with **overlay filesystem** support (modern kernels)
 - [`crun`](https://github.com/containers/crun) – lightweight OCI container runtime
 - [`skopeo`](https://github.com/containers/skopeo) + [`umoci`](https://github.com/opencontainers/umoci) – for pulling and unpacking OCI images

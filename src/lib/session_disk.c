@@ -33,8 +33,7 @@ int session_disk_setup(const char *session_dir, const char *image_path,
     /* format it */
     pid_t p = fork();
     if (p == 0) {
-        char *const argv[] = {"mkfs.ext4", "-q", (char *)image_path,
-                              NULL};
+        char *const argv[] = {"mkfs.ext4", "-q", (char *)image_path, NULL};
         execvp("mkfs.ext4", argv);
         _exit(1);
     }
@@ -51,9 +50,12 @@ int session_disk_setup(const char *session_dir, const char *image_path,
     if (m == 0) {
         setuid(0); // otherwise mount will fail
         setgid(0);
-        char *const argv[] = {"mount",        "-o",
-                              "loop,nodev,nosuid", (char *)image_path,
-                              (char *)session_dir, NULL};
+        char *const argv[] = {"mount",
+                              "-o",
+                              "loop,nodev,nosuid",
+                              (char *)image_path,
+                              (char *)session_dir,
+                              NULL};
         execvp("mount", argv);
         _exit(1);
     }

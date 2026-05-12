@@ -11,7 +11,7 @@
 #include <time.h>
 
 #define CAALD_SOCK_PATH "/run/caald.sock"
-#define CAALD_MAX_STR   64
+#define CAALD_MAX_STR 64
 
 /* message types */
 typedef enum {
@@ -29,8 +29,8 @@ typedef enum {
  */
 typedef struct {
     uint8_t type;
-    char    username[CAALD_MAX_STR];
-    char    container_id[CAALD_MAX_STR];
+    char username[CAALD_MAX_STR];
+    char container_id[CAALD_MAX_STR];
     int32_t pid;
 } __attribute__((packed)) caald_request_t;
 
@@ -43,7 +43,7 @@ typedef struct {
 typedef struct {
     uint8_t ok;
     int32_t count;
-    char    error[CAALD_MAX_STR];
+    char error[CAALD_MAX_STR];
 } __attribute__((packed)) caald_response_t;
 
 /*
@@ -52,8 +52,8 @@ typedef struct {
  * then N of these structs back-to-back.
  */
 typedef struct {
-    char    username[CAALD_MAX_STR];
-    char    container_id[CAALD_MAX_STR];
+    char username[CAALD_MAX_STR];
+    char container_id[CAALD_MAX_STR];
     int32_t pid;
     int64_t start_time;
 } __attribute__((packed)) caald_session_info_t;

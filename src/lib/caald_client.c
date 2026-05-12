@@ -109,7 +109,8 @@ int caald_session_count(int fd) {
     return resp.ok ? (int)resp.count : -1;
 }
 
-int caald_session_list(int fd, caald_session_info_t *sessions, int max_sessions) {
+int caald_session_list(int fd, caald_session_info_t *sessions,
+                       int max_sessions) {
     caald_request_t req = {0};
     req.type = CAALD_SESSION_LIST;
 

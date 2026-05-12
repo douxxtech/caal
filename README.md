@@ -9,13 +9,22 @@
 
 ## How It Works
 
-When a user logs in via SSH, their shell is replaced by **CaaLsh** (Container as a Login Shell) – a small C binary that:
+CaaL is made of three binaries that work together:
 
-1. Clears the entire environment (no SSH vars, no host state leaks in)
-2. Mounts a per-session **overlay filesystem** over the container's rootfs, backed by a loop-mounted ext4 image – writes go there, the base image stays untouched
-3. Execs **[crun](https://github.com/containers/crun)** to start the OCI container
-4. Optionally enforces a **session timeout** (kills the container after N seconds)
-5. On exit, tears down the overlay, and wipes the loop image – the host is left exactly as it was
+- **`caalsh`** – the login shell. Replaces the user's shell in `/etc/passwd`. Every SSH login goes through it.
+- **`caald`** – a background daemon that tracks active sessions and allows sessions managment.
+- **`caalctl`** – an admin CLI for inspecting and managing live sessions.
+
+When a user logs in via SSH, `caalsh`:
+
+1. Reads `/etc/caal/caal.toml` and verifies the user is configured and enabled
+2. Checks with `caald` that the session limit hasn't been reached
+3. Clears the entire environment – no SSH vars or host state leaks into the container
+4. Creates a per-session **overlay filesystem** over the container's rootfs, backed by a loop-mounted ext4 image – writes go there, the base image stays untouched
+5. Execs **[crun](https://github.com/containers/crun)** to start the OCI container
+6. Registers the session with `caald`
+7. Optionally enforces a **session timeout** (kills the container after N seconds)
+8. On exit, tears down the overlay, wipes the loop image, and unregisters from `caald` – the host is left exactly as it was
 
 Each session is fully ephemeral: nothing persists between logins.
 
@@ -39,6 +48,7 @@ CaaL is useful for:
 - Linux host with **overlay filesystem** support (modern kernels)
 - [`crun`](https://github.com/containers/crun) – lightweight OCI container runtime
 - [`skopeo`](https://github.com/containers/skopeo) + [`umoci`](https://github.com/opencontainers/umoci) – for pulling and unpacking OCI images
+- `e2fsprogs` – provides `mkfs.ext4` for session disk creation
 - `git` – required by the one-liner installer
 - Root access for install and user setup
 - `gcc`, `make`
@@ -47,7 +57,7 @@ The setup script handles installing all of these automatically on supported dist
 
 > [!NOTE]
 > `max_sessions` is bounded by your kernel's available loopback devices.
-> The default is 8 (`/dev/loop0`-`loop7`). You can raise it with `max_loop=N`
+> The default is 8 (`/dev/loop0`–`loop7`). You can raise it with `max_loop=N`
 > in your kernel parameters or via `modprobe loop max_loop=N`.
 
 ## Installation
@@ -64,10 +74,62 @@ sudo bash scripts/setup.sh
 
 The setup script will:
 - Detect your package manager and install dependencies (Debian/Ubuntu, Fedora/RHEL, CentOS, Arch, openSUSE supported)
-- Build and install `caalsh` to `/usr/local/bin/caalsh`
+- Build and install `caalsh`, `caald`, and `caalctl` to `/usr/local/bin/`
 - Register `caalsh` as a valid shell in `/etc/shells`
+- Install and optionally enable/start the `caald` systemd service
 - Pull a default [busybox](https://hub.docker.com/_/busybox) bundle to `/opt/caal/bundles/default`
 - Create a base config at `/etc/caal/caal.toml`
+
+## The Daemon (`caald`)
+
+`caald` is a small background daemon that keeps track of active sessions over a Unix socket (`/run/caald.sock`). `caalsh` registers each session with it on login and unregisters on logout.
+
+Its main jobs are:
+- Providing an accurate session count so `max_sessions` is enforced reliably
+- Giving `caalctl` a live view of running sessions
+
+Managing the daemon:
+
+```bash
+systemctl status caald  # check if it's running
+systemctl start caald   # start it
+systemctl enable caald  # enable on boot
+journalctl -u caald     # view logs
+```
+
+> [!NOTE]
+> `caalsh` has a fallback for when `caald` isn't running, session count is less accurate but keeps logins working.
+> Running without `caald` is not recommended for production.
+
+## Managing Sessions (`caalctl`)
+
+`caalctl` talks to `caald` to give you a live view of what's running and let you kill sessions remotely.
+
+```bash
+# List all active sessions
+caalctl list
+
+# Print the number of active sessions
+caalctl count
+
+# Kill a specific session by its container ID
+caalctl kill caalsh-1234-1718000000
+
+# Kill all sessions for a user
+caalctl killuser bob
+```
+
+Example output of `caalctl list`:
+
+```
+USERNAME             CONTAINER ID                   PID      STARTED
+--------             ------------                   ---      -------
+bob                  caalsh-1234-1718000000         1234     2026-01-15 14:23:01
+alice                caalsh-5678-1718000120         5678     2026-01-15 14:25:21
+```
+
+> [!NOTE]
+> `caalctl` requires `caald` to be running. If it can't connect, it will say so.
 
 ## Creating a CaaL User
 
@@ -109,7 +171,12 @@ sudo delcaal bob     # interactive
 sudo delcaal bob -y  # skip confirmation
 ```
 
-This removes three things: the system user account, the `[bob]` entry from `caal.toml`, and the per-user sshd drop-in at `/etc/ssh/sshd_config.d/caal-bob.conf`. sshd is reloaded automatically.
+This removes the system user account, the `[bob]` entry from `caal.toml`, and the per-user sshd drop-in at `/etc/ssh/sshd_config.d/caal-bob.conf`. sshd is reloaded automatically.
+
+> [!NOTE]
+> `delcaal` does not kill active sessions for the user. If bob is currently logged in,
+> his session will run until it ends naturally. Use `caalctl killuser bob` first
+> if you want to terminate active sessions immediately.
 
 ## Configuration
 
@@ -117,7 +184,7 @@ CaaL's config lives at `/etc/caal/caal.toml`. Every user that should be allowed 
 
 ```toml
 # general config
-max_sessions = 4                       # max simultaneous sessions
+max_sessions = 4                       # max simultaneous sessions across all users
 
 [bob]
 bundle  = "/opt/caal/bundles/default"  # absolute path to the OCI bundle
@@ -131,8 +198,8 @@ enabled = true                         # set to false to lock out without deleti
 - `bundle` must be an absolute path
 - `timeout` is enforced via `SIGKILL` – the container is forcibly terminated when it expires
 - `disk` sets the session ext4 image size; space is reserved upfront via `fallocate`, so it counts against real disk immediately – not just when written
-- `disk` cant be 0 – it'll be replaced by the default (`1024`)
-- Setting `enabled = false` is a clean way to temporarily suspend a user's access without removing their account or config
+- `disk` can't be 0 – it'll be replaced by the default (`1024`)
+- Setting `enabled = false` blocks new logins for that user without removing their account or config. It does **not** kill active sessions – use `caalctl killuser <user>` for that
 
 ## Custom Bundles
 
@@ -164,11 +231,11 @@ The bundle directory must follow the [OCI Runtime Bundle spec](https://github.co
 
 ## Security Notes
 
-- CaaLsh **clears the entire environment** before launching the container – nothing from the SSH session leaks in
+- `caalsh` **clears the entire environment** before launching the container – nothing from the SSH session leaks in
 - The overlay filesystem ensures the container rootfs is **always clean** – a user cannot permanently modify it
 - The SSH drop-in written by `newcaal` disables agent forwarding, TCP forwarding, and X11 for the user
 - Users are created with `/tmp` as their home directory – they have no persistent home on the host
-- CaaLsh must be **setuid root** (or run as root) to perform mounts – the Makefile handles this
+- `caalsh` must be **setuid root** (or run as root) to perform mounts – the Makefile handles this
 
 ## Need Help ?
 Have an issue running CaaL ? Feel free to open a new [issue](https://github.com/douxxtech/caal/issues/new/)

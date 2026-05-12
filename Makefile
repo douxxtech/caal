@@ -48,4 +48,4 @@ uninstall:
 	@echo "Uninstalled"
 
 clean:
-	rm -f $(CAALSH_OBJ) $(DAEMON_OBJ)
+	rm -f $(CAALSH_OBJ) $(DAEMON_OBJ) $(CONTROLLER_OBJ)

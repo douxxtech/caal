@@ -108,6 +108,7 @@ int main(int argc, char *argv[]) {
     int fd = caald_connect();
     if (fd < 0) {
         fprintf(stderr, "[CaaLctl] cannot connect to caald (is it running?)\n");
+        fprintf(stderr, "[CaaLctl] You may want to run this as root (sudo) if you aren't already\n");
         return 1;
     }
 

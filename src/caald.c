@@ -317,7 +317,7 @@ int main(void) {
         return 1;
     }
 
-    chmod(CAALD_SOCK_PATH, 0666);
+    chmod(CAALD_SOCK_PATH, 0600);
 
     if (listen(sock_fd, 128) < 0) {
         syslog(LOG_ERR, "listen failed: %s", strerror(errno));

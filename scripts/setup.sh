@@ -53,19 +53,19 @@ install_deps() {
     if command -v apt-get &>/dev/null; then
         log INFO "Debian/Ubuntu detected"
         apt-get update -qq
-        apt-get install -y gcc make crun skopeo umoci
+        apt-get install -y gcc make e2fsprogs crun skopeo umoci
 
     elif command -v dnf &>/dev/null; then
         log INFO "Fedora/RHEL detected"
-        dnf install -y gcc make crun skopeo umoci
+        dnf install -y gcc make e2fsprogs crun skopeo umoci
 
     elif command -v yum &>/dev/null; then
         log INFO "CentOS/older RHEL detected"
-        yum install -y gcc make crun skopeo umoci
+        yum install -y gcc make e2fsprogs crun skopeo umoci
 
     elif command -v pacman &>/dev/null; then
         log INFO "Arch Linux detected"
-        pacman -Sy --noconfirm gcc make crun skopeo umoci
+        pacman -Sy --noconfirm gcc make e2fsprogs crun skopeo umoci
 
     elif command -v zypper &>/dev/null; then
         log INFO "openSUSE detected"

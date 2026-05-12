@@ -33,9 +33,9 @@ int session_disk_setup(const char *session_dir, const char *image_path,
     /* format it */
     pid_t p = fork();
     if (p == 0) {
-        char *const argv[] = {"/sbin/mkfs.ext4", "-q", (char *)image_path,
+        char *const argv[] = {"mkfs.ext4", "-q", (char *)image_path,
                               NULL};
-        execv("/sbin/mkfs.ext4", argv);
+        execvp("mkfs.ext4", argv);
         _exit(1);
     }
     if (p < 0)
@@ -51,10 +51,10 @@ int session_disk_setup(const char *session_dir, const char *image_path,
     if (m == 0) {
         setuid(0); // otherwise mount will fail
         setgid(0);
-        char *const argv[] = {"/bin/mount",        "-o",
+        char *const argv[] = {"mount",        "-o",
                               "loop,nodev,nosuid", (char *)image_path,
                               (char *)session_dir, NULL};
-        execv("/bin/mount", argv);
+        execvp("mount", argv);
         _exit(1);
     }
     if (m < 0)
@@ -80,7 +80,7 @@ void session_disk_cleanup(const char *session_dir, const char *image_path) {
     pid_t p = fork();
     if (p == 0) {
         char *const argv[] = {"/bin/rm", "-rf", (char *)session_dir, NULL};
-        execv("/bin/rm", argv);
+        execvp("rm", argv);
         _exit(1);
     }
     if (p > 0)

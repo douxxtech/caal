@@ -106,6 +106,9 @@ This removes the system user, the `caal.toml` entry, and the SSH drop-in config.
 CaaL's config lives at `/etc/caal/caal.toml`. Every user that should be allowed in **must** have an entry – no entry means access denied, regardless of whether the system account exists.
 
 ```toml
+# general config
+max_sessions = 4                       # max simultaneous sessions
+
 [bob]
 bundle  = "/opt/caal/bundles/default"  # absolute path to the OCI bundle
 timeout = 0                            # session lifetime in seconds, 0 = unlimited
@@ -114,6 +117,7 @@ enabled = true                         # set to false to lock out without deleti
 ```
 
 **Notes:**
+- `max_sessions` shouldn't be higher than your system's loopback mount devices
 - `bundle` must be an absolute path
 - `timeout` is enforced via `SIGKILL` – the container is forcibly terminated when it expires
 - `disk` cant be 0 – it'll be replaced by the default (`1024`)

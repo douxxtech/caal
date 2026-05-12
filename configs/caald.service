@@ -1,0 +1,13 @@
+[Unit]
+Description=CaaLd - Container as a Login Shell Daemon
+After=network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/local/bin/caald
+PIDFile=/run/caald.pid
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

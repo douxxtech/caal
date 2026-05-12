@@ -18,6 +18,7 @@ readonly NC='\033[0m'
 readonly DEFAULT_BUNDLE="/opt/caal/bundles/default"
 readonly SESSIONS_DIR="/var/lib/caal/sessions"
 readonly CONFIG_PATH="/etc/caal/caal.toml"
+readonly SERVICE_PATH="/etc/systemd/system/caald.service"
 
 # ============================================================================
 # UTILITY
@@ -99,6 +100,34 @@ build_and_install() {
 }
 
 # ============================================================================
+# SYSTEMD SERVICE
+# ============================================================================
+
+install_service() {
+    log INFO "Installing caald systemd service..."
+
+    cat configs/caald.service > "$SERVICE_PATH"
+
+    systemctl daemon-reload
+
+    read -r -p "Enable caald on boot? [y/N] " answer
+    if [[ "${answer,,}" == "y" ]]; then
+        systemctl enable caald
+        log INFO "caald enabled on boot"
+    else
+        log INFO "caald not enabled on boot"
+    fi
+
+    read -r -p "Start caald now? [y/N] " answer
+    if [[ "${answer,,}" == "y" ]]; then
+        systemctl start caald
+        log INFO "caald started"
+    else
+        log INFO "caald not started, run 'systemctl start caald' when ready"
+    fi
+}
+
+# ============================================================================
 # DEFAULT BUNDLE
 # ============================================================================
 
@@ -120,23 +149,7 @@ create_default_bundle() {
     if [[ ! -f "$CONFIG_PATH" ]]; then
         log INFO "Creating base config at $CONFIG_PATH"
         mkdir -p "$(dirname "$CONFIG_PATH")"
-        cat > "$CONFIG_PATH" <<EOF
-# CaaL configuration
-# Each section maps a unix user to an OCI bundle.
-# Format:
-# [<user>]
-# bundle = /full/path/to/bundle
-# timeout = timeout_seconds      # 0 = no timeout (default)
-# disk = disk_size_mb            # defaults to 1024 MB
-# enabled = true|false           # defaults to true
-
-# General configuration
-
-# The max allowed simultaneous sessions. 
-# Shouldn't be higher that your systems available loopback devices. 
-max_sessions = 4
-
-EOF
+        cat "configs/caal.toml" > "$CONFIG_PATH"
 
     log INFO "Creating sessions dir at $SESSIONS_DIR"
     mkdir -p "$SESSIONS_DIR"
@@ -162,6 +175,9 @@ main() {
     echo ""
 
     build_and_install
+    echo ""
+
+    install_service
     echo ""
 
     create_default_bundle

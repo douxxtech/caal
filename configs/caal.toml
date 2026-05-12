@@ -1,0 +1,14 @@
+# CaaL configuration
+# Each section maps a unix user to an OCI bundle.
+# Format:
+# [<user>]
+# bundle = /full/path/to/bundle
+# timeout = timeout_seconds      # 0 = no timeout (default)
+# disk = disk_size_mb            # defaults to 1024 MB
+# enabled = true|false           # defaults to true
+
+# General configuration
+
+# The max allowed simultaneous sessions. 
+# Shouldn't be higher that your systems available loopback devices. 
+max_sessions = 4

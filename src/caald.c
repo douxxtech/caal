@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -33,6 +34,7 @@
 
 #include "config.h"
 #include "lib/caald_proto.h"
+#include "lib/tomlc17.h"
 
 typedef struct {
     char username[64];
@@ -42,8 +44,9 @@ typedef struct {
     int active;
 } session_t;
 
-static session_t sessions[MAX_SERVER_SESSIONS];
+static session_t *sessions = NULL;
 static int session_count = 0;
+static int max_sessions = 0;
 
 /* logging */
 static void log_event(const char *event, const char *username,
@@ -65,15 +68,26 @@ static session_t *find_session(const char *container_id) {
 /* register a new session */
 static void handle_register(const char *username, const char *container_id,
                             pid_t pid, char *resp) {
-    if (session_count >= MAX_SERVER_SESSIONS) {
-        snprintf(resp, CAALD_MAX_MSG,
-                 "{\"ok\":false,\"error\":\"max sessions reached\"}");
-        return;
+    /* reuse an inactive slot before appending */
+    session_t *s = NULL;
+    for (int i = 0; i < session_count; i++) {
+        if (!sessions[i].active) {
+            s = &sessions[i];
+            break;
+        }
     }
 
-    session_t *s = &sessions[session_count++];
-    strncpy(s->username, username, sizeof(s->username) - 1);
-    strncpy(s->container_id, container_id, sizeof(s->container_id) - 1);
+    if (!s) {
+        if (session_count >= max_sessions) {
+            snprintf(resp, CAALD_MAX_MSG,
+                     "{\"ok\":false,\"error\":\"max sessions reached\"}");
+            return;
+        }
+        s = &sessions[session_count++];
+    }
+
+    snprintf(s->username, sizeof(s->username), "%s", username);
+    snprintf(s->container_id, sizeof(s->container_id), "%s", container_id);
     s->pid = pid;
     s->start_time = time(NULL);
     s->active = 1;
@@ -259,6 +273,18 @@ static void handle_client(int client_fd) {
 int main(void) {
     openlog("caald", LOG_PID | LOG_NDELAY, LOG_DAEMON);
 
+    /* ensure only one instance runs at a time */
+    int pid_fd = open(CAALD_PID_PATH, O_RDWR | O_CREAT, 0644);
+    if (pid_fd < 0) {
+        syslog(LOG_ERR, "could not open pid file");
+        return 1;
+    }
+    if (flock(pid_fd, LOCK_EX | LOCK_NB) < 0) {
+        syslog(LOG_ERR, "caald already running, exiting");
+        close(pid_fd);
+        return 0;
+    }
+
     /* daemonize */
     if (fork() != 0)
         exit(0);
@@ -267,6 +293,12 @@ int main(void) {
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
+
+    /* write our PID now that we've forked */
+    char pidbuf[32];
+    ftruncate(pid_fd, 0);
+    snprintf(pidbuf, sizeof(pidbuf), "%d\n", (int)getpid());
+    write(pid_fd, pidbuf, strlen(pidbuf));
 
     /* create socket */
     int sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -293,6 +325,34 @@ int main(void) {
     }
 
     syslog(LOG_INFO, "caald started");
+
+    /* parse config to get max_sessions */
+    FILE *fp = fopen(CONFIG_PATH, "r");
+    if (fp == NULL) {
+        syslog(LOG_ERR, "could not open config");
+        return 1;
+    }
+
+    toml_result_t config = toml_parse_file(fp);
+    fclose(fp);
+    if (!config.ok) {
+        syslog(LOG_ERR, "could not parse config");
+        return 1;
+    }
+
+    toml_datum_t max_sess_datum = toml_seek(config.toptab, "max_sessions");
+    if (max_sess_datum.type == TOML_INT64 && max_sess_datum.u.int64 > 0)
+        max_sessions = (int)max_sess_datum.u.int64;
+    else
+        max_sessions = 1024;
+
+    sessions = calloc(max_sessions, sizeof(session_t));
+    if (!sessions) {
+        syslog(LOG_ERR, "failed to allocate session table");
+        return 1;
+    }
+
+    toml_free(config);
 
     /* accept loop */
     while (1) {

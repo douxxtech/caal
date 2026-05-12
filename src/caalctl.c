@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "config.h"
 #include "lib/caald_client.h"
@@ -37,8 +38,9 @@ static void usage(const char *prog) {
 }
 
 static int cmd_list(int fd) {
-    caald_session_info_t sessions[MAX_SERVER_SESSIONS];
-    int n = caald_session_list(fd, sessions, MAX_SERVER_SESSIONS);
+    caald_session_info_t sessions[1024];
+
+    int n = caald_session_list(fd, sessions, 1024);
     if (n < 0) {
         fprintf(stderr, "[CaaLctl] failed to list sessions\n");
         return 1;

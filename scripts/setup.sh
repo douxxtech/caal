@@ -16,6 +16,7 @@ readonly YEL='\033[1;33m'
 readonly NC='\033[0m'
 
 readonly DEFAULT_BUNDLE="/opt/caal/bundles/default"
+readonly SESSIONS_DIR="/var/lib/caal/sessions"
 readonly CONFIG_PATH="/etc/caal/caal.toml"
 
 # ============================================================================
@@ -129,7 +130,17 @@ create_default_bundle() {
 # disk = disk_size_mb            # defaults to 1024 MB
 # enabled = true|false           # defaults to true
 
+# General configuration
+
+# The max allowed simultaneous sessions. 
+# Shouldn't be higher that your systems available loopback devices. 
+max_sessions = 4
+
 EOF
+
+    log INFO "Creating sessions dir at $SESSIONS_DIR"
+    mkdir -p "$SESSIONS_DIR"
+
     else
         log WARN "$CONFIG_PATH already exists, skipping"
     fi

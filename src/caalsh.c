@@ -38,6 +38,30 @@
 /* crun child pid, needs to be global so the signal handler can reach it */
 static pid_t child_pid = -1;
 
+/*
+ * Cleanup. Tear down the overlay and tmpfs in reverse order, then
+ * remove the now empty tmpdir. Finally exec into crun delete to wipe the
+ * container state. Fork a child for crun delete so we can wait on it and return
+ * cleanly
+ */
+static void cleanup(const char *rootfs, const char *tmp_dir,
+                    const char *sock_path, const char *container_id) {
+    unlink(sock_path);
+    umount2(rootfs, MNT_DETACH);
+    umount2(tmp_dir, MNT_DETACH);
+    rmdir(tmp_dir);
+
+    pid_t p = fork();
+    if (p == 0) {
+        char *const argv[] = {CRUN_PATH, "delete", "--force",
+                              (char *)container_id, NULL};
+        execv(CRUN_PATH, argv);
+        _exit(1);
+    }
+    if (p > 0)
+        waitpid(p, NULL, 0);
+}
+
 /* SIGALRM handler, fires when the session timeout expires and kills the child
  */
 static void on_alarm(int sig) {
@@ -171,10 +195,13 @@ int main(void) {
     snprintf(work, sizeof(work), "/tmp/%s/work", container_id);
     snprintf(rootfs, sizeof(rootfs), "%s/rootfs", bundle_path);
 
-    mkdir(tmp_dir, 0700);
-    mount("tmpfs", tmp_dir, "tmpfs", 0, "size=100m");
-    mkdir(upper, 0700);
-    mkdir(work, 0700);
+    if (mkdir(tmp_dir, 0700) != 0 ||
+        mount("tmpfs", tmp_dir, "tmpfs", 0, "size=100m") != 0 ||
+        mkdir(upper, 0700) != 0 || mkdir(work, 0700) != 0) {
+        write(STDERR_FILENO, "[CaaLsh] tmpfs setup failed\n", 26);
+        toml_free(config);
+        return 1;
+    }
 
     snprintf(overlay_opts, sizeof(overlay_opts),
              "lowerdir=%s,upperdir=%s,workdir=%s", rootfs, upper, work);
@@ -214,6 +241,7 @@ int main(void) {
         _exit(1);
     } else if (pid < 0) {
         write(STDERR_FILENO, "[CaaLsh] fork failed\n", 19);
+        cleanup(rootfs, tmp_dir, sock_path, container_id);
         toml_free(config);
         return 1;
     }
@@ -223,12 +251,8 @@ int main(void) {
      * child. SIGALRM will fire on_alarm which kills the child if it overstays.
      */
     child_pid = pid;
-    if (timeout > 0) {
-        signal(SIGALRM, on_alarm);
-        alarm((unsigned int)timeout);
-    }
-
-    child_pid = pid;
+    signal(SIGTERM, on_alarm);
+    signal(SIGHUP, on_alarm);
     if (timeout > 0) {
         signal(SIGALRM, on_alarm);
         alarm((unsigned int)timeout);
@@ -237,27 +261,12 @@ int main(void) {
     int master_fd = pty_bridge_recv(sock_fd);
     if (master_fd < 0) {
         write(STDERR_FILENO, "[CaaLsh] pty_bridge_recv failed\n", 30);
-    } else {
-        pty_bridge_run(master_fd, pid);
+        cleanup(rootfs, tmp_dir, sock_path, container_id);
+        return 1;
     }
+    pty_bridge_run(master_fd, pid);
 
     alarm(0); /* session ended naturally, cancel any pending alarm */
-
-    /*
-     * Cleanup time. Tear down the overlay and tmpfs in reverse order, then
-     * remove the now empty tmpdir. Finally exec into crun delete to wipe the
-     * container state. We use execv here so crun delete takes over this
-     * process directly, no need to wait on a child for cleanup.
-     */
-    unlink(sock_path);
-    umount(rootfs);
-    umount(tmp_dir);
-    rmdir(tmp_dir);
-
-    char *const del_argv[] = {CRUN_PATH, "delete", "--force", container_id,
-                              NULL};
-    execv(CRUN_PATH, del_argv);
-
-    write(STDERR_FILENO, "[CaaLsh] delete exec failed\n", 26);
-    return 1;
+    cleanup(rootfs, tmp_dir, sock_path, container_id);
+    return 0;
 }

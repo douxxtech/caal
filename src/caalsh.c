@@ -16,6 +16,8 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define _GNU_SOURCE
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <pwd.h>
@@ -44,7 +46,6 @@ static pid_t child_pid = -1;
  * delete the container state via crun. Fork a child for crun delete so
  * we can wait on it and return cleanly.
  */
-
 static void cleanup(const char *rootfs, const char *session_dir,
                     const char *image_path, const char *sock_path,
                     const char *container_id) {
@@ -63,6 +64,22 @@ static void cleanup(const char *rootfs, const char *session_dir,
         waitpid(p, NULL, 0);
 }
 
+static int count_active_sessions(void) {
+    DIR *d = opendir(SESSION_DIR);
+    if (d == NULL)
+        return 0;
+
+    int count = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        /* only count directories */
+        if (strncmp(ent->d_name, "caalsh-", 7) == 0 && ent->d_type == DT_DIR)
+            count++;
+    }
+    closedir(d);
+    return count;
+}
+
 /* SIGALRM handler, fires when the session timeout expires and kills the child
  */
 static void on_alarm(int sig) {
@@ -75,14 +92,14 @@ int main(void) {
     /* Figure out who we are */
     struct passwd *pw = getpwuid(getuid());
     if (pw == NULL) {
-        write(STDERR_FILENO, "[CaaLsh] could not resolve user\n", 30);
+        write(STDERR_FILENO, "[CaaLsh] could not resolve user\n", 32);
         return 1;
     }
     const char *username = pw->pw_name;
 
     /* sanity cap before we use username in any snprintf below */
     if (strlen(username) > 32) {
-        write(STDERR_FILENO, "[CaaLsh] username too long\n", 25);
+        write(STDERR_FILENO, "[CaaLsh] username too long\n", 27);
         return 1;
     }
 
@@ -93,14 +110,29 @@ int main(void) {
      */
     FILE *fp = fopen(CONFIG_PATH, "r");
     if (fp == NULL) {
-        write(STDERR_FILENO, "[CaaLsh] could not open config\n", 29);
+        write(STDERR_FILENO, "[CaaLsh] could not open config\n", 31);
         return 1;
     }
 
     toml_result_t config = toml_parse_file(fp);
     fclose(fp);
     if (!config.ok) {
-        write(STDERR_FILENO, "[CaaLsh] could not parse config\n", 30);
+        write(STDERR_FILENO, "[CaaLsh] could not parse config\n", 32);
+        return 1;
+    }
+
+    /*
+     * Read global max_sessions.
+     * zero or missing means unlimited
+     */
+    toml_datum_t max_sess_datum = toml_seek(config.toptab, "max_sessions");
+    int64_t max_sessions = 0;
+    if (max_sess_datum.type == TOML_INT64)
+        max_sessions = max_sess_datum.u.int64;
+
+    if (max_sessions > 0 && count_active_sessions() >= max_sessions) {
+        write(STDERR_FILENO, "[CaaLsh] max sessions reached, try again later\n",47);
+        toml_free(config);
         return 1;
     }
 
@@ -113,13 +145,12 @@ int main(void) {
 
     toml_datum_t bundle_datum = toml_seek(config.toptab, seek_path);
     if (bundle_datum.type == TOML_UNKNOWN) {
-        write(STDERR_FILENO, "[CaaLsh] user not configured, access denied\n",
-              42);
+        write(STDERR_FILENO, "[CaaLsh] user not configured, access denied\n",44);
         toml_free(config);
         return 1;
     }
     if (bundle_datum.type != TOML_STRING) {
-        write(STDERR_FILENO, "[CaaLsh] bundle is not a string\n", 30);
+        write(STDERR_FILENO, "[CaaLsh] bundle is not a string\n", 32);
         toml_free(config);
         return 1;
     }
@@ -128,7 +159,7 @@ int main(void) {
 
     /* relative paths are a footgun, require absolute only */
     if (bundle_path[0] != '/') {
-        write(STDERR_FILENO, "[CaaLsh] bundle path must be absolute\n", 36);
+        write(STDERR_FILENO, "[CaaLsh] bundle path must be absolute\n", 38);
         toml_free(config);
         return 1;
     }
@@ -138,7 +169,7 @@ int main(void) {
     snprintf(enabled_path, sizeof(enabled_path), "%s.enabled", username);
     toml_datum_t enabled_datum = toml_seek(config.toptab, enabled_path);
     if (enabled_datum.type == TOML_BOOLEAN && !enabled_datum.u.boolean) {
-        write(STDERR_FILENO, "[CaaLsh] user disabled, access denied\n", 36);
+        write(STDERR_FILENO, "[CaaLsh] user disabled, access denied\n", 38);
         toml_free(config);
         return 1;
     }
@@ -171,7 +202,7 @@ int main(void) {
      * the container.
      */
     if (clearenv() != 0) {
-        write(STDERR_FILENO, "[CaaLsh] clearenv failed\n", 23);
+        write(STDERR_FILENO, "[CaaLsh] clearenv failed\n", 25);
         toml_free(config);
         return 1;
     }
@@ -183,7 +214,7 @@ int main(void) {
     if (setenv("PATH",
                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                1)) {
-        write(STDERR_FILENO, "[CaaLsh] setenv failed\n", 21);
+        write(STDERR_FILENO, "[CaaLsh] setenv failed\n", 23);
         toml_free(config);
         return 1;
     }
@@ -225,7 +256,7 @@ int main(void) {
              "lowerdir=%s,upperdir=%s,workdir=%s", rootfs, upper, work);
 
     if (mount("overlay", rootfs, "overlay", 0, overlay_opts) != 0) {
-        write(STDERR_FILENO, "[CaaLsh] overlay mount failed\n", 28);
+        write(STDERR_FILENO, "[CaaLsh] overlay mount failed\n", 30);
         session_disk_cleanup(session_dir, image_path);
         toml_free(config);
         return 1;
@@ -235,7 +266,7 @@ int main(void) {
     char sock_path[108];
     int sock_fd = pty_bridge_init(sock_path, sizeof(sock_path));
     if (sock_fd < 0) {
-        write(STDERR_FILENO, "[CaaLsh] pty_bridge_init failed\n", 30);
+        write(STDERR_FILENO, "[CaaLsh] pty_bridge_init failed\n", 32);
         toml_free(config);
         return 1;
     }
@@ -256,10 +287,10 @@ int main(void) {
             CRUN_PATH,          "run",     "--bundle",   (char *)bundle_path,
             "--console-socket", sock_path, container_id, NULL};
         execv(CRUN_PATH, argv);
-        write(STDERR_FILENO, "[CaaLsh] exec failed\n", 19);
+        write(STDERR_FILENO, "[CaaLsh] exec failed\n", 21);
         _exit(1);
     } else if (pid < 0) {
-        write(STDERR_FILENO, "[CaaLsh] fork failed\n", 19);
+        write(STDERR_FILENO, "[CaaLsh] fork failed\n", 21);
         cleanup(rootfs, session_dir, image_path, sock_path, container_id);
         toml_free(config);
         return 1;
@@ -279,7 +310,7 @@ int main(void) {
 
     int master_fd = pty_bridge_recv(sock_fd);
     if (master_fd < 0) {
-        write(STDERR_FILENO, "[CaaLsh] pty_bridge_recv failed\n", 30);
+        write(STDERR_FILENO, "[CaaLsh] pty_bridge_recv failed\n", 32);
         cleanup(rootfs, session_dir, image_path, sock_path, container_id);
         return 1;
     }

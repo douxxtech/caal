@@ -49,7 +49,7 @@ int session_disk_setup(const char *session_dir, const char *image_path,
      * set up first */
     pid_t m = fork();
     if (m == 0) {
-        setuid(0);
+        setuid(0); // otherwise mount will fail
         setgid(0);
         char *const argv[] = {"/bin/mount",        "-o",
                               "loop,nodev,nosuid", (char *)image_path,

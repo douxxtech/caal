@@ -34,12 +34,14 @@
 #include <unistd.h>
 
 #include "config.h"
+#include "lib/caald_client.h"
 #include "lib/pty_bridge.h"
 #include "lib/session_disk.h"
 #include "lib/tomlc17.h"
 
-/* crun child pid, needs to be global so the signal handler can reach it */
+/* child pids, needs to be global so the signal handlers can reach them */
 static pid_t child_pid = -1;
+static pid_t timer_pid = -1;
 
 /*
  * Cleanup. Unmount the overlay, tear down the session disk image, then
@@ -62,9 +64,28 @@ static void cleanup(const char *rootfs, const char *session_dir,
     }
     if (p > 0)
         waitpid(p, NULL, 0);
+
+    int daemon_fd = caald_connect();
+    if (daemon_fd >= 0) {
+        caald_session_unregister(daemon_fd, container_id);
+        close(daemon_fd);
+    }
 }
 
+/* try to get session count from daemon, fall back to dir counting if it fails
+ */
 static int count_active_sessions(void) {
+    int fd = caald_connect();
+    if (fd >= 0) {
+        int count = caald_session_count(fd);
+        close(fd);
+        if (count >= 0)
+            return count;
+        /* daemon responded but gave error, warn and fall back */
+        fprintf(stderr, "[CaaLsh] daemon query failed, falling back\n");
+    }
+
+    /* daemon not available or failed, count dirs */
     DIR *d = opendir(SESSION_DIR);
     if (d == NULL)
         return 0;
@@ -72,7 +93,6 @@ static int count_active_sessions(void) {
     int count = 0;
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
-        /* only count directories */
         if (strncmp(ent->d_name, "caalsh-", 7) == 0 && ent->d_type == DT_DIR)
             count++;
     }
@@ -80,26 +100,18 @@ static int count_active_sessions(void) {
     return count;
 }
 
-/* SIGALRM handler, fires when the session timeout expires and kills the child
- */
-static void on_alarm(int sig) {
-    (void)sig;
-    if (child_pid > 0)
-        kill(child_pid, SIGKILL);
-}
-
 int main(void) {
     /* Figure out who we are */
     struct passwd *pw = getpwuid(getuid());
     if (pw == NULL) {
-        write(STDERR_FILENO, "[CaaLsh] could not resolve user\n", 32);
+        fprintf(stderr, "[CaaLsh] could not resolve user\n");
         return 1;
     }
     const char *username = pw->pw_name;
 
     /* sanity cap before we use username in any snprintf below */
     if (strlen(username) > 32) {
-        write(STDERR_FILENO, "[CaaLsh] username too long\n", 27);
+        fprintf(stderr, "[CaaLsh] username too long\n");
         return 1;
     }
 
@@ -110,14 +122,14 @@ int main(void) {
      */
     FILE *fp = fopen(CONFIG_PATH, "r");
     if (fp == NULL) {
-        write(STDERR_FILENO, "[CaaLsh] could not open config\n", 31);
+        fprintf(stderr, "[CaaLsh] could not open config\n");
         return 1;
     }
 
     toml_result_t config = toml_parse_file(fp);
     fclose(fp);
     if (!config.ok) {
-        write(STDERR_FILENO, "[CaaLsh] could not parse config\n", 32);
+        fprintf(stderr, "[CaaLsh] could not parse config\n");
         return 1;
     }
 
@@ -131,7 +143,7 @@ int main(void) {
         max_sessions = max_sess_datum.u.int64;
 
     if (max_sessions > 0 && count_active_sessions() >= max_sessions) {
-        write(STDERR_FILENO, "[CaaLsh] max sessions reached, try again later\n",47);
+        fprintf(stderr, "[CaaLsh] max sessions reached, try again later\n");
         toml_free(config);
         return 1;
     }
@@ -145,12 +157,12 @@ int main(void) {
 
     toml_datum_t bundle_datum = toml_seek(config.toptab, seek_path);
     if (bundle_datum.type == TOML_UNKNOWN) {
-        write(STDERR_FILENO, "[CaaLsh] user not configured, access denied\n",44);
+        fprintf(stderr, "[CaaLsh] user not configured, access denied\n");
         toml_free(config);
         return 1;
     }
     if (bundle_datum.type != TOML_STRING) {
-        write(STDERR_FILENO, "[CaaLsh] bundle is not a string\n", 32);
+        fprintf(stderr, "[CaaLsh] bundle is not a string\n");
         toml_free(config);
         return 1;
     }
@@ -159,7 +171,7 @@ int main(void) {
 
     /* relative paths are a footgun, require absolute only */
     if (bundle_path[0] != '/') {
-        write(STDERR_FILENO, "[CaaLsh] bundle path must be absolute\n", 38);
+        fprintf(stderr, "[CaaLsh] bundle path must be absolute\n");
         toml_free(config);
         return 1;
     }
@@ -169,7 +181,7 @@ int main(void) {
     snprintf(enabled_path, sizeof(enabled_path), "%s.enabled", username);
     toml_datum_t enabled_datum = toml_seek(config.toptab, enabled_path);
     if (enabled_datum.type == TOML_BOOLEAN && !enabled_datum.u.boolean) {
-        write(STDERR_FILENO, "[CaaLsh] user disabled, access denied\n", 38);
+        fprintf(stderr, "[CaaLsh] user disabled, access denied\n");
         toml_free(config);
         return 1;
     }
@@ -202,7 +214,7 @@ int main(void) {
      * the container.
      */
     if (clearenv() != 0) {
-        write(STDERR_FILENO, "[CaaLsh] clearenv failed\n", 25);
+        fprintf(stderr, "[CaaLsh] clearenv failed\n");
         toml_free(config);
         return 1;
     }
@@ -214,7 +226,7 @@ int main(void) {
     if (setenv("PATH",
                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                1)) {
-        write(STDERR_FILENO, "[CaaLsh] setenv failed\n", 23);
+        fprintf(stderr, "[CaaLsh] setenv failed\n");
         toml_free(config);
         return 1;
     }
@@ -241,7 +253,7 @@ int main(void) {
     snprintf(rootfs, sizeof(rootfs), "%s/rootfs", bundle_path);
 
     if (session_disk_setup(session_dir, image_path, disk_size_mb) != 0) {
-        write(STDERR_FILENO, "[CaaLsh] session disk setup failed\n", 35);
+        fprintf(stderr, "[CaaLsh] session disk setup failed\n");
         toml_free(config);
         return 1;
     }
@@ -256,7 +268,7 @@ int main(void) {
              "lowerdir=%s,upperdir=%s,workdir=%s", rootfs, upper, work);
 
     if (mount("overlay", rootfs, "overlay", 0, overlay_opts) != 0) {
-        write(STDERR_FILENO, "[CaaLsh] overlay mount failed\n", 30);
+        fprintf(stderr, "[CaaLsh] overlay mount failed\n");
         session_disk_cleanup(session_dir, image_path);
         toml_free(config);
         return 1;
@@ -266,7 +278,7 @@ int main(void) {
     char sock_path[108];
     int sock_fd = pty_bridge_init(sock_path, sizeof(sock_path));
     if (sock_fd < 0) {
-        write(STDERR_FILENO, "[CaaLsh] pty_bridge_init failed\n", 32);
+        fprintf(stderr, "[CaaLsh] pty_bridge_init failed\n");
         toml_free(config);
         return 1;
     }
@@ -287,36 +299,50 @@ int main(void) {
             CRUN_PATH,          "run",     "--bundle",   (char *)bundle_path,
             "--console-socket", sock_path, container_id, NULL};
         execv(CRUN_PATH, argv);
-        write(STDERR_FILENO, "[CaaLsh] exec failed\n", 21);
+        fprintf(stderr, "[CaaLsh] exec failed\n");
         _exit(1);
     } else if (pid < 0) {
-        write(STDERR_FILENO, "[CaaLsh] fork failed\n", 21);
+        fprintf(stderr, "[CaaLsh] fork failed\n");
         cleanup(rootfs, session_dir, image_path, sock_path, container_id);
         toml_free(config);
         return 1;
     }
 
     /*
-     * Parent: arm the timeout alarm if one was configured, then block on the
-     * child. SIGALRM will fire on_alarm which kills the child if it overstays.
+     * Parent: arm the timeout process if one was configured, then block on the
+     * child.
      */
     child_pid = pid;
-    signal(SIGTERM, on_alarm);
-    signal(SIGHUP, on_alarm);
+
+    int daemon_fd = caald_connect();
+    if (daemon_fd >= 0) {
+        if (!caald_session_register(daemon_fd, username, container_id,
+                                    getpid())) {
+            fprintf(stderr, "[CaaLsh] daemon register failed\n");
+        }
+        close(daemon_fd);
+    }
+
     if (timeout > 0) {
-        signal(SIGALRM, on_alarm);
-        alarm((unsigned int)timeout);
+        timer_pid = fork();
+        if (timer_pid == 0) {
+            sleep((unsigned int)timeout);
+            kill(child_pid, SIGTERM);
+            _exit(0);
+        }
     }
 
     int master_fd = pty_bridge_recv(sock_fd);
     if (master_fd < 0) {
-        write(STDERR_FILENO, "[CaaLsh] pty_bridge_recv failed\n", 32);
+        fprintf(stderr, "[CaaLsh] pty_bridge_recv failed\n");
         cleanup(rootfs, session_dir, image_path, sock_path, container_id);
         return 1;
     }
     pty_bridge_run(master_fd, pid);
 
-    alarm(0); /* session ended naturally, cancel any pending alarm */
+    if (timer_pid > 0)
+        kill(timer_pid, SIGKILL);
+
     cleanup(rootfs, session_dir, image_path, sock_path, container_id);
     return 0;
 }

@@ -20,6 +20,8 @@
 /* PTY master fd, needs to be global so the SIGWINCH handler can reach it */
 static int g_master_fd = -1;
 
+static volatile sig_atomic_t g_terminate = 0;
+
 /* forward the current terminal size to the PTY master on resize */
 static void on_winch(int sig) {
     (void)sig;
@@ -30,9 +32,19 @@ static void on_winch(int sig) {
         ioctl(g_master_fd, TIOCSWINSZ, &ws);
 }
 
+static void on_term(int sig) {
+    (void)sig;
+    g_terminate = 1;
+    if (g_master_fd >= 0) {
+        close(g_master_fd);
+        g_master_fd = -1;
+    }
+}
+
 int pty_bridge_init(char *sock_path, size_t sock_path_len) {
     /* build a unique socket path under /tmp */
-    snprintf(sock_path, sock_path_len, "/tmp/caalsh-pty-%d.sock", (int)getpid());
+    snprintf(sock_path, sock_path_len, "/tmp/caalsh-pty-%d.sock",
+             (int)getpid());
 
     int sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock_fd < 0)
@@ -69,11 +81,11 @@ int pty_bridge_recv(int sock_fd) {
     char buf[1];
     char cmsg_buf[CMSG_SPACE(sizeof(int))];
 
-    struct iovec iov = { .iov_base = buf, .iov_len = sizeof(buf) };
+    struct iovec iov = {.iov_base = buf, .iov_len = sizeof(buf)};
     struct msghdr msg = {
-        .msg_iov        = &iov,
-        .msg_iovlen     = 1,
-        .msg_control    = cmsg_buf,
+        .msg_iov = &iov,
+        .msg_iovlen = 1,
+        .msg_control = cmsg_buf,
         .msg_controllen = sizeof(cmsg_buf),
     };
 
@@ -84,9 +96,8 @@ int pty_bridge_recv(int sock_fd) {
     close(conn_fd);
 
     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    if (cmsg == NULL                       ||
-        cmsg->cmsg_level != SOL_SOCKET     ||
-        cmsg->cmsg_type  != SCM_RIGHTS) {
+    if (cmsg == NULL || cmsg->cmsg_level != SOL_SOCKET ||
+        cmsg->cmsg_type != SCM_RIGHTS) {
         return -1;
     }
 
@@ -108,6 +119,10 @@ void pty_bridge_run(int master_fd, pid_t child) {
     sa.sa_handler = on_winch;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGWINCH, &sa, NULL);
+
+    sa.sa_handler = on_term;
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
 
     /* put our stdin into raw mode so keypresses go straight through */
     struct termios orig, raw;
@@ -131,8 +146,11 @@ void pty_bridge_run(int master_fd, pid_t child) {
         int nfds = master_fd + 1;
 
         if (select(nfds, &rfds, NULL, NULL, NULL) < 0) {
-            if (errno == EINTR)
-                continue; /* SIGWINCH or other signal, just retry */
+            if (errno == EINTR) {
+                if (g_terminate)
+                    break; /* SIGTERM, exit  */
+                continue;  /* SIGWINCH or other, retry */
+            }
             break;
         }
 

@@ -12,10 +12,10 @@
 When a user logs in via SSH, their shell is replaced by **CaaLsh** (Container as a Login Shell) – a small C binary that:
 
 1. Clears the entire environment (no SSH vars, no host state leaks in)
-2. Mounts a per-session **overlay filesystem** over the container's rootfs, backed by a tmpfs – writes go there, the base image stays untouched
+2. Mounts a per-session **overlay filesystem** over the container's rootfs, backed by a loop-mounted ext4 image – writes go there, the base image stays untouched
 3. Execs **[crun](https://github.com/containers/crun)** to start the OCI container
 4. Optionally enforces a **session timeout** (kills the container after N seconds)
-5. On exit, tears down the overlay, and wipes the tmpfs – the host is left exactly as it was
+5. On exit, tears down the overlay, and wipes the loop image – the host is left exactly as it was
 
 Each session is fully ephemeral: nothing persists between logins.
 
@@ -109,12 +109,14 @@ CaaL's config lives at `/etc/caal/caal.toml`. Every user that should be allowed 
 [bob]
 bundle  = "/opt/caal/bundles/default"  # absolute path to the OCI bundle
 timeout = 0                            # session lifetime in seconds, 0 = unlimited
+session_size = 1                       # session disk size in GB
 enabled = true                         # set to false to lock out without deleting
 ```
 
 **Notes:**
 - `bundle` must be an absolute path
 - `timeout` is enforced via `SIGKILL` – the container is forcibly terminated when it expires
+- `session_size` cant be 0 – it'll be replaced by the default (1)
 - Setting `enabled = false` is a clean way to temporarily suspend a user's access without removing their account or config
 
 ## Custom Bundles

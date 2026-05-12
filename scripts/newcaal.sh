@@ -22,6 +22,7 @@ readonly CAALSH_PATH="/usr/local/bin/caalsh"
 # Defaults (used with -y)
 readonly DEFAULT_BUNDLE="/opt/caal/bundles/default"
 readonly DEFAULT_TIMEOUT=0
+readonly DEFAULT_DISK_SIZE=1024
 readonly DEFAULT_ENABLED="true"
 
 # ============================================================================
@@ -166,7 +167,8 @@ write_toml() {
     local username="$1"
     local bundle="$2"
     local timeout="$3"
-    local enabled="$4"
+    local disk_size="$4"
+    local enabled="$5"
 
     log INFO "Writing config entry to $CONFIG_PATH"
     mkdir -p "$(dirname "$CONFIG_PATH")"
@@ -189,9 +191,10 @@ EOF
     cat >> "$CONFIG_PATH" <<EOF
 
 [$username]
-bundle  = "$bundle"
-enabled = $enabled
-timeout = $timeout
+bundle    = "$bundle"
+enabled   = $enabled
+disk      = $disk_size
+timeout   = $timeout
 EOF
 }
 
@@ -287,6 +290,13 @@ main() {
             exit 1
         fi
 
+        ask "Session disk size in MB" "$DEFAULT_DISK_SIZE"
+        disk_size="$REPLY"
+        if ! [[ "$disk_size" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            log ERROR "Disk size must be a non-negative number."
+            exit 1
+        fi
+
         log INFO "Enable user immediately?"
         enabled="true"
         select_option "Yes" "No"
@@ -299,11 +309,12 @@ main() {
     log INFO "Creating user '$username' with:"
     log INFO "  Bundle  : $bundle"
     log INFO "  Timeout : $timeout"
+    log INFO "  Disk    : $disk_size"
     log INFO "  Enabled : $enabled"
     echo ""
 
     create_user  "$username"
-    write_toml   "$username" "$bundle" "$timeout" "$enabled"
+    write_toml   "$username" "$bundle" "$timeout" "$disk_size" "$enabled"
     write_sshd   "$username"
 
     log INFO "Done. '$username' is ready."

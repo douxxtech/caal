@@ -2,8 +2,7 @@
  * Copyright (C) 2026 douxxtech
  * session_disk: per-session ext4 loop image setup and teardown
  */
-
-#include "session_disk.h"
+#define _GNU_SOURCE
 
 #include <fcntl.h>
 #include <linux/falloc.h>
@@ -13,8 +12,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "session_disk.h"
+
 int session_disk_setup(const char *session_dir, const char *image_path,
-                       int64_t size_gb) {
+                       int64_t size_mb) {
     if (mkdir(session_dir, 0700) != 0)
         return -1;
 
@@ -23,7 +24,7 @@ int session_disk_setup(const char *session_dir, const char *image_path,
     int fd = open(image_path, O_CREAT | O_WRONLY | O_EXCL, 0600);
     if (fd < 0)
         return -1;
-    if (fallocate(fd, 0, 0, size_gb * 1024 * 1024 * 1024) != 0) {
+    if (fallocate(fd, 0, 0, size_mb * 1024 * 1024) != 0) {
         close(fd);
         return -1;
     }

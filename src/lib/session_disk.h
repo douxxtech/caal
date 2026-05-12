@@ -10,7 +10,7 @@
  * Returns 0 on success, -1 on error.
  */
 int session_disk_setup(const char *session_dir, const char *image_path,
-                       int64_t size_gb);
+                       int64_t size_mb);
 
 /*
  * Tear down a session disk. Unmounts session_dir, removes the image file,

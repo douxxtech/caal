@@ -109,14 +109,14 @@ CaaL's config lives at `/etc/caal/caal.toml`. Every user that should be allowed 
 [bob]
 bundle  = "/opt/caal/bundles/default"  # absolute path to the OCI bundle
 timeout = 0                            # session lifetime in seconds, 0 = unlimited
-session_size = 1                       # session disk size in GB
+disk    = 1                          # session disk size in GB
 enabled = true                         # set to false to lock out without deleting
 ```
 
 **Notes:**
 - `bundle` must be an absolute path
 - `timeout` is enforced via `SIGKILL` – the container is forcibly terminated when it expires
-- `session_size` cant be 0 – it'll be replaced by the default (1)
+- `disk` cant be 0 – it'll be replaced by the default (1)
 - Setting `enabled = false` is a clean way to temporarily suspend a user's access without removing their account or config
 
 ## Custom Bundles

@@ -159,13 +159,11 @@ int main(void) {
      * Defaults to 1GB if not set or zero.
      */
     char disk_size_path[128];
-    snprintf(disk_size_path, sizeof(disk_size_path), "%s.disk_size",
-             username);
-    toml_datum_t disk_size_datum =
-        toml_seek(config.toptab, disk_size_path);
-    int64_t disk_size_gb = 1; /* default to 1GB */
+    snprintf(disk_size_path, sizeof(disk_size_path), "%s.disk", username);
+    toml_datum_t disk_size_datum = toml_seek(config.toptab, disk_size_path);
+    int64_t disk_size_mb = 1024; /* default to 1GB */
     if (disk_size_datum.type == TOML_INT64 && disk_size_datum.u.int64 > 0)
-        disk_size_gb = disk_size_datum.u.int64;
+        disk_size_mb = disk_size_datum.u.int64;
 
     /*
      * Nuke the entire environment before we launch crun.
@@ -211,7 +209,7 @@ int main(void) {
     snprintf(work, sizeof(work), SESSION_DIR "/%s/work", container_id);
     snprintf(rootfs, sizeof(rootfs), "%s/rootfs", bundle_path);
 
-    if (session_disk_setup(session_dir, image_path, disk_size_gb) != 0) {
+    if (session_disk_setup(session_dir, image_path, disk_size_mb) != 0) {
         write(STDERR_FILENO, "[CaaLsh] session disk setup failed\n", 35);
         toml_free(config);
         return 1;
@@ -224,8 +222,7 @@ int main(void) {
      */
     char overlay_opts[512];
     snprintf(overlay_opts, sizeof(overlay_opts),
-             "lowerdir=%s,upperdir=%s,workdir=%s",
-             rootfs, upper, work);
+             "lowerdir=%s,upperdir=%s,workdir=%s", rootfs, upper, work);
 
     if (mount("overlay", rootfs, "overlay", 0, overlay_opts) != 0) {
         write(STDERR_FILENO, "[CaaLsh] overlay mount failed\n", 28);

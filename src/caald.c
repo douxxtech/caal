@@ -1,5 +1,5 @@
 /*
- * CaaLd - Container as a Login Shell
+ * CaaLd - Container as a Login Shell Daemon
  * Copyright (C) 2026 douxxtech
  *
  * This program is free software: you can redistribute it and/or modify
@@ -37,22 +37,48 @@
 #include "lib/tomlc17.h"
 
 typedef struct {
-    char username[64];
-    char container_id[64];
-    pid_t pid;
+    char   username[CAALD_MAX_STR];
+    char   container_id[CAALD_MAX_STR];
+    pid_t  pid;
     time_t start_time;
-    int active;
+    int    active;
 } session_t;
 
-static session_t *sessions = NULL;
-static int session_count = 0;
-static int max_sessions = 0;
+static session_t *sessions     = NULL;
+static int        session_count = 0;
+static int        max_sessions  = 0;
 
 /* logging */
 static void log_event(const char *event, const char *username,
                       const char *container_id) {
     syslog(LOG_INFO, "[CaaLd] %s user=%s container=%s", event, username,
            container_id);
+}
+
+/* send exactly n bytes, retrying on partial writes */
+static bool write_all(int fd, const void *buf, size_t n) {
+    const char *p = buf;
+    while (n > 0) {
+        ssize_t w = write(fd, p, n);
+        if (w <= 0)
+            return false;
+        p += w;
+        n -= w;
+    }
+    return true;
+}
+
+/* read exactly n bytes, retrying on partial reads */
+static bool read_all(int fd, void *buf, size_t n) {
+    char *p = buf;
+    while (n > 0) {
+        ssize_t r = read(fd, p, n);
+        if (r <= 0)
+            return false;
+        p += r;
+        n -= r;
+    }
+    return true;
 }
 
 /* find a session by container_id */
@@ -66,8 +92,8 @@ static session_t *find_session(const char *container_id) {
 }
 
 /* register a new session */
-static void handle_register(const char *username, const char *container_id,
-                            pid_t pid, char *resp) {
+static void handle_register(const caald_request_t *req,
+                            caald_response_t *resp) {
     /* reuse an inactive slot before appending */
     session_t *s = NULL;
     for (int i = 0; i < session_count; i++) {
@@ -79,195 +105,158 @@ static void handle_register(const char *username, const char *container_id,
 
     if (!s) {
         if (session_count >= max_sessions) {
-            snprintf(resp, CAALD_MAX_MSG,
-                     "{\"ok\":false,\"error\":\"max sessions reached\"}");
+            resp->ok = 0;
+            strncpy(resp->error, "max sessions reached", sizeof(resp->error) - 1);
             return;
         }
         s = &sessions[session_count++];
     }
 
-    snprintf(s->username, sizeof(s->username), "%s", username);
-    snprintf(s->container_id, sizeof(s->container_id), "%s", container_id);
-    s->pid = pid;
+    strncpy(s->username, req->username, sizeof(s->username) - 1);
+    strncpy(s->container_id, req->container_id, sizeof(s->container_id) - 1);
+    s->pid        = (pid_t)req->pid;
     s->start_time = time(NULL);
-    s->active = 1;
+    s->active     = 1;
 
-    log_event("SESSION_START", username, container_id);
-    snprintf(resp, CAALD_MAX_MSG, "{\"ok\":true}");
+    log_event("SESSION_START", s->username, s->container_id);
+    resp->ok = 1;
 }
 
 /* unregister a session */
-static void handle_unregister(const char *container_id, char *resp) {
-    session_t *s = find_session(container_id);
+static void handle_unregister(const caald_request_t *req,
+                              caald_response_t *resp) {
+    session_t *s = find_session(req->container_id);
     if (!s) {
-        snprintf(resp, CAALD_MAX_MSG,
-                 "{\"ok\":false,\"error\":\"session not found\"}");
+        resp->ok = 0;
+        strncpy(resp->error, "session not found", sizeof(resp->error) - 1);
         return;
     }
 
-    log_event("SESSION_END", s->username, container_id);
+    log_event("SESSION_END", s->username, s->container_id);
     s->active = 0;
-    snprintf(resp, CAALD_MAX_MSG, "{\"ok\":true}");
+    resp->ok  = 1;
 }
 
 /* count active sessions */
-static void handle_count(char *resp) {
+static void handle_count(caald_response_t *resp) {
     int count = 0;
     for (int i = 0; i < session_count; i++) {
         if (sessions[i].active)
             count++;
     }
-    snprintf(resp, CAALD_MAX_MSG, "{\"ok\":true,\"count\":%d}", count);
+    resp->ok    = 1;
+    resp->count = count;
 }
 
 /* list all active sessions */
-static void handle_list(char *resp) {
-    int offset = snprintf(resp, CAALD_MAX_MSG, "{\"ok\":true,\"sessions\":[");
+static void handle_list(int client_fd, caald_response_t *resp) {
+    /* count first so we can fill resp->count before sending */
+    int count = 0;
+    for (int i = 0; i < session_count; i++) {
+        if (sessions[i].active)
+            count++;
+    }
 
-    int first = 1;
+    resp->ok    = 1;
+    resp->count = count;
+
+    /* send the response header first */
+    write_all(client_fd, resp, sizeof(*resp));
+
+    /* then stream the session structs */
     for (int i = 0; i < session_count; i++) {
         if (!sessions[i].active)
             continue;
 
-        if (!first)
-            offset += snprintf(resp + offset, CAALD_MAX_MSG - offset, ",");
-        first = 0;
+        caald_session_info_t info = {0};
+        strncpy(info.username, sessions[i].username, sizeof(info.username) - 1);
+        strncpy(info.container_id, sessions[i].container_id,
+                sizeof(info.container_id) - 1);
+        info.pid        = (int32_t)sessions[i].pid;
+        info.start_time = (int64_t)sessions[i].start_time;
 
-        offset += snprintf(resp + offset, CAALD_MAX_MSG - offset,
-                           "{\"username\":\"%s\",\"container_id\":\"%s\","
-                           "\"pid\":%d,\"start_time\":%ld}",
-                           sessions[i].username, sessions[i].container_id,
-                           (int)sessions[i].pid, (long)sessions[i].start_time);
+        write_all(client_fd, &info, sizeof(info));
     }
 
-    snprintf(resp + offset, CAALD_MAX_MSG - offset, "]}");
+    /* signal to the caller that we already sent the response */
+    resp->ok = 0;
 }
 
 /* kill a session by container_id */
-static void handle_kill(const char *container_id, char *resp) {
-    session_t *s = find_session(container_id);
+static void handle_kill(const caald_request_t *req, caald_response_t *resp) {
+    session_t *s = find_session(req->container_id);
     if (!s) {
-        snprintf(resp, CAALD_MAX_MSG,
-                 "{\"ok\":false,\"error\":\"session not found\"}");
+        resp->ok = 0;
+        strncpy(resp->error, "session not found", sizeof(resp->error) - 1);
         return;
     }
 
     kill(s->pid, SIGTERM);
-    log_event("SESSION_KILLED", s->username, container_id);
+    log_event("SESSION_KILLED", s->username, s->container_id);
     s->active = 0;
-    snprintf(resp, CAALD_MAX_MSG, "{\"ok\":true}");
+    resp->ok  = 1;
 }
 
 /* kill all sessions for a user */
-static void handle_kill_user(const char *username, char *resp) {
+static void handle_kill_user(const caald_request_t *req,
+                             caald_response_t *resp) {
     int killed = 0;
     for (int i = 0; i < session_count; i++) {
-        if (sessions[i].active && strcmp(sessions[i].username, username) == 0) {
+        if (sessions[i].active &&
+            strcmp(sessions[i].username, req->username) == 0) {
             kill(sessions[i].pid, SIGTERM);
-            log_event("SESSION_KILLED", username, sessions[i].container_id);
+            log_event("SESSION_KILLED", req->username,
+                      sessions[i].container_id);
             sessions[i].active = 0;
             killed++;
         }
     }
 
     if (killed == 0) {
-        snprintf(resp, CAALD_MAX_MSG,
-                 "{\"ok\":false,\"error\":\"no sessions found\"}");
+        resp->ok = 0;
+        strncpy(resp->error, "no sessions found", sizeof(resp->error) - 1);
     } else {
-        snprintf(resp, CAALD_MAX_MSG, "{\"ok\":true,\"killed\":%d}", killed);
+        resp->ok    = 1;
+        resp->count = killed;
     }
 }
 
 /* process a client message */
 static void handle_client(int client_fd) {
-    uint32_t len;
-    if (read(client_fd, &len, sizeof(len)) != sizeof(len))
-        return;
-    if (len > CAALD_MAX_MSG)
+    caald_request_t req = {0};
+    if (!read_all(client_fd, &req, sizeof(req)))
         return;
 
-    char *buf = malloc(len + 1);
-    if (!buf)
-        return;
-    if (read(client_fd, buf, len) != (ssize_t)len) {
-        free(buf);
-        return;
-    }
-    buf[len] = '\0';
+    caald_response_t resp = {0};
+    bool already_sent = false;
 
-    /* parse message type */
-    int type = -1;
-    sscanf(buf, "{\"type\":%d", &type);
-
-    char resp[CAALD_MAX_MSG];
-    memset(resp, 0, sizeof(resp));
-
-    switch (type) {
-    case CAALD_SESSION_REGISTER: {
-        char username[64], container_id[64];
-        int pid;
-        if (sscanf(buf,
-                   "{\"type\":%*d,\"username\":\"%63[^\"]\",\"container_id\":"
-                   "\"%63[^\"]\",\"pid\":%d}",
-                   username, container_id, &pid) == 3) {
-            handle_register(username, container_id, pid, resp);
-        } else {
-            snprintf(resp, sizeof(resp),
-                     "{\"ok\":false,\"error\":\"parse error\"}");
-        }
+    switch ((caald_msg_type_t)req.type) {
+    case CAALD_SESSION_REGISTER:
+        handle_register(&req, &resp);
         break;
-    }
-    case CAALD_SESSION_UNREGISTER: {
-        char container_id[64];
-        if (sscanf(buf, "{\"type\":%*d,\"container_id\":\"%63[^\"]\"}",
-                   container_id) == 1) {
-            handle_unregister(container_id, resp);
-        } else {
-            snprintf(resp, sizeof(resp),
-                     "{\"ok\":false,\"error\":\"parse error\"}");
-        }
+    case CAALD_SESSION_UNREGISTER:
+        handle_unregister(&req, &resp);
         break;
-    }
     case CAALD_SESSION_COUNT:
-        handle_count(resp);
+        handle_count(&resp);
         break;
     case CAALD_SESSION_LIST:
-        handle_list(resp);
+        handle_list(client_fd, &resp);
+        already_sent = true; /* handle_list sends its own response */
         break;
-    case CAALD_SESSION_KILL: {
-        char container_id[64];
-        if (sscanf(buf, "{\"type\":%*d,\"container_id\":\"%63[^\"]\"}",
-                   container_id) == 1) {
-            handle_kill(container_id, resp);
-
-        } else {
-            snprintf(resp, sizeof(resp),
-                     "{\"ok\":false,\"error\":\"parse error\"}");
-        }
+    case CAALD_SESSION_KILL:
+        handle_kill(&req, &resp);
         break;
-    }
-    case CAALD_SESSION_KILL_USER: {
-        char username[64];
-        if (sscanf(buf, "{\"type\":%*d,\"username\":\"%63[^\"]\"}", username) ==
-            1) {
-            handle_kill_user(username, resp);
-        } else {
-            snprintf(resp, sizeof(resp),
-                     "{\"ok\":false,\"error\":\"parse error\"}");
-        }
+    case CAALD_SESSION_KILL_USER:
+        handle_kill_user(&req, &resp);
         break;
-    }
     default:
-        snprintf(resp, sizeof(resp),
-                 "{\"ok\":false,\"error\":\"unknown type\"}");
+        resp.ok = 0;
+        strncpy(resp.error, "unknown type", sizeof(resp.error) - 1);
     }
 
-    free(buf);
-
-    /* send response */
-    uint32_t resp_len = strlen(resp);
-    write(client_fd, &resp_len, sizeof(resp_len));
-    write(client_fd, resp, resp_len);
+    if (!already_sent)
+        write_all(client_fd, &resp, sizeof(resp));
 }
 
 int main(void) {

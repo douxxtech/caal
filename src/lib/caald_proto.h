@@ -7,10 +7,11 @@
 #define CAALD_PROTO_H
 
 #include <stdint.h>
+#include <sys/types.h>
 #include <time.h>
 
 #define CAALD_SOCK_PATH "/run/caald.sock"
-#define CAALD_MAX_MSG 8192
+#define CAALD_MAX_STR   64
 
 /* message types */
 typedef enum {
@@ -22,12 +23,39 @@ typedef enum {
     CAALD_SESSION_KILL_USER,
 } caald_msg_type_t;
 
-/* session info structure used in list responses */
+/*
+ * Single fixed-size request struct for all message types.
+ * Unused fields are zeroed by the sender and ignored by the receiver.
+ */
 typedef struct {
-    char username[64];
-    char container_id[64];
-    pid_t pid;
-    time_t start_time;
-} caald_session_info_t;
+    uint8_t type;
+    char    username[CAALD_MAX_STR];
+    char    container_id[CAALD_MAX_STR];
+    int32_t pid;
+} __attribute__((packed)) caald_request_t;
 
-#endif
+/*
+ * Fixed-size response for everything except LIST.
+ * - ok:    1 on success, 0 on failure
+ * - count: filled for COUNT responses
+ * - error: null-terminated message on failure
+ */
+typedef struct {
+    uint8_t ok;
+    int32_t count;
+    char    error[CAALD_MAX_STR];
+} __attribute__((packed)) caald_response_t;
+
+/*
+ * One entry in a LIST response.
+ * The daemon sends a caald_response_t first (with count = N),
+ * then N of these structs back-to-back.
+ */
+typedef struct {
+    char    username[CAALD_MAX_STR];
+    char    container_id[CAALD_MAX_STR];
+    int32_t pid;
+    int64_t start_time;
+} __attribute__((packed)) caald_session_info_t;
+
+#endif /* CAALD_PROTO_H */

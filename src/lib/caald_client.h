@@ -18,7 +18,7 @@ bool caald_session_register(int fd, const char *username, const char *container_
 /* unregister a session */
 bool caald_session_unregister(int fd, const char *container_id);
 
-/* get the current session count */
+/* get the current session count, returns count or -1 on error */
 int caald_session_count(int fd);
 
 /* list all active sessions, returns number of sessions or -1 on error */
@@ -30,4 +30,4 @@ bool caald_session_kill(int fd, const char *container_id);
 /* kill all sessions for a user */
 bool caald_session_kill_user(int fd, const char *username);
 
-#endif
+#endif /* CAALD_CLIENT_H */

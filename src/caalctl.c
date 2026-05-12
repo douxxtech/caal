@@ -59,7 +59,10 @@ static int cmd_list(int fd) {
 
     for (int i = 0; i < n; i++) {
         char timebuf[32];
-        struct tm *tm = localtime(&sessions[i].start_time);
+
+        time_t start_time = (time_t)sessions[i].start_time;
+        struct tm *tm = localtime(&start_time);
+
         strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", tm);
 
         printf("%-20s %-30s %-8d %s\n", sessions[i].username,
@@ -108,7 +111,8 @@ int main(int argc, char *argv[]) {
     int fd = caald_connect();
     if (fd < 0) {
         fprintf(stderr, "[CaaLctl] cannot connect to caald (is it running?)\n");
-        fprintf(stderr, "[CaaLctl] You may want to run this as root (sudo) if you aren't already\n");
+        fprintf(stderr, "[CaaLctl] You may want to run this as root (sudo) if "
+                        "you aren't already\n");
         return 1;
     }
 

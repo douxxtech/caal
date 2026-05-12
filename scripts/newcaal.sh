@@ -292,8 +292,8 @@ main() {
 
         ask "Session disk size in MB" "$DEFAULT_DISK_SIZE"
         disk_size="$REPLY"
-        if ! [[ "$disk_size" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-            log ERROR "Disk size must be a non-negative number."
+        if ! [[ "$disk_size" =~ ^[0-9]+$ ]]; then
+            log ERROR "Disk size must be a non-negative integer."
             exit 1
         fi
 

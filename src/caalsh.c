@@ -33,23 +33,24 @@
 
 #include "config.h"
 #include "lib/pty_bridge.h"
+#include "lib/session_disk.h"
 #include "lib/tomlc17.h"
 
 /* crun child pid, needs to be global so the signal handler can reach it */
 static pid_t child_pid = -1;
 
 /*
- * Cleanup. Tear down the overlay and tmpfs in reverse order, then
- * remove the now empty tmpdir. Finally exec into crun delete to wipe the
- * container state. Fork a child for crun delete so we can wait on it and return
- * cleanly
+ * Cleanup. Unmount the overlay, tear down the session disk image, then
+ * delete the container state via crun. Fork a child for crun delete so
+ * we can wait on it and return cleanly.
  */
-static void cleanup(const char *rootfs, const char *tmp_dir,
-                    const char *sock_path, const char *container_id) {
+
+static void cleanup(const char *rootfs, const char *session_dir,
+                    const char *image_path, const char *sock_path,
+                    const char *container_id) {
     unlink(sock_path);
     umount2(rootfs, MNT_DETACH);
-    umount2(tmp_dir, MNT_DETACH);
-    rmdir(tmp_dir);
+    session_disk_cleanup(session_dir, image_path);
 
     pid_t p = fork();
     if (p == 0) {
@@ -154,6 +155,19 @@ int main(void) {
         timeout = timeout_datum.u.int64;
 
     /*
+     * Read the session disk size in gigabytes.
+     * Defaults to 1GB if not set or zero.
+     */
+    char session_size_path[128];
+    snprintf(session_size_path, sizeof(session_size_path), "%s.session_size",
+             username);
+    toml_datum_t session_size_datum =
+        toml_seek(config.toptab, session_size_path);
+    int64_t session_size_gb = 1; /* default to 1GB */
+    if (session_size_datum.type == TOML_INT64 && session_size_datum.u.int64 > 0)
+        session_size_gb = session_size_datum.u.int64;
+
+    /*
      * Nuke the entire environment before we launch crun.
      * We dont want any SSH injected vars or sshd state leaking into
      * the container.
@@ -182,32 +196,40 @@ int main(void) {
              (long)time(NULL));
 
     /*
-     * Set up the per session overlay filesystem.
+     * Set up the per-session overlay filesystem.
      *
-     * We mount a tmpfs under /tmp/<container_id> and use it as the overlay
-     * scratch space. upper gets all the writes, work is required by overlayfs.
-     * When the session ends everything is unmounted and the tmpfs vanishes,
+     * We create a loop-mounted ext4 image under SESSION_DIR and use it as
+     * the overlay scratch space. upper gets all the writes, work is required
+     * by overlayfs. When the session ends the image is unmounted and deleted,
      * so the container rootfs is always clean for the next login.
      */
-    char tmp_dir[96], upper[128], work[128], rootfs[128], overlay_opts[512];
-    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/%s", container_id);
-    snprintf(upper, sizeof(upper), "/tmp/%s/upper", container_id);
-    snprintf(work, sizeof(work), "/tmp/%s/work", container_id);
+    char session_dir[128], image_path[128], upper[160], work[160], rootfs[128];
+    snprintf(session_dir, sizeof(session_dir), SESSION_DIR "/%s", container_id);
+    snprintf(image_path, sizeof(image_path), SESSION_DIR "/%s.img",
+             container_id);
+    snprintf(upper, sizeof(upper), SESSION_DIR "/%s/upper", container_id);
+    snprintf(work, sizeof(work), SESSION_DIR "/%s/work", container_id);
     snprintf(rootfs, sizeof(rootfs), "%s/rootfs", bundle_path);
 
-    if (mkdir(tmp_dir, 0700) != 0 ||
-        mount("tmpfs", tmp_dir, "tmpfs", 0, "size=100m") != 0 ||
-        mkdir(upper, 0700) != 0 || mkdir(work, 0700) != 0) {
-        write(STDERR_FILENO, "[CaaLsh] tmpfs setup failed\n", 26);
+    if (session_disk_setup(session_dir, image_path, session_size_gb) != 0) {
+        write(STDERR_FILENO, "[CaaLsh] session disk setup failed\n", 33);
         toml_free(config);
         return 1;
     }
 
+    /*
+     * Mount the overlay. The loop-mounted image provides upper and work,
+     * the bundle rootfs is the read-only lower layer. All writes go to the
+     * loop image and are discarded when the session ends.
+     */
+    char overlay_opts[512];
     snprintf(overlay_opts, sizeof(overlay_opts),
-             "lowerdir=%s,upperdir=%s,workdir=%s", rootfs, upper, work);
+             "lowerdir=%s,upperdir=%s,workdir=%s",
+             rootfs, upper, work);
 
     if (mount("overlay", rootfs, "overlay", 0, overlay_opts) != 0) {
         write(STDERR_FILENO, "[CaaLsh] overlay mount failed\n", 28);
+        session_disk_cleanup(session_dir, image_path);
         toml_free(config);
         return 1;
     }
@@ -224,7 +246,7 @@ int main(void) {
     /*
      * Fork here. The child execs into crun and becomes the container process.
      * The parent waits for it to finish, then handles cleanup (unmounts,
-     * tmpfs removal, crun delete).
+     * session disk removal, crun delete).
      *
      * We do it this way instead of just execv so we can always run cleanup,
      * regardless of how the session ends.
@@ -241,7 +263,7 @@ int main(void) {
         _exit(1);
     } else if (pid < 0) {
         write(STDERR_FILENO, "[CaaLsh] fork failed\n", 19);
-        cleanup(rootfs, tmp_dir, sock_path, container_id);
+        cleanup(rootfs, session_dir, image_path, sock_path, container_id);
         toml_free(config);
         return 1;
     }
@@ -261,12 +283,12 @@ int main(void) {
     int master_fd = pty_bridge_recv(sock_fd);
     if (master_fd < 0) {
         write(STDERR_FILENO, "[CaaLsh] pty_bridge_recv failed\n", 30);
-        cleanup(rootfs, tmp_dir, sock_path, container_id);
+        cleanup(rootfs, session_dir, image_path, sock_path, container_id);
         return 1;
     }
     pty_bridge_run(master_fd, pid);
 
     alarm(0); /* session ended naturally, cancel any pending alarm */
-    cleanup(rootfs, tmp_dir, sock_path, container_id);
+    cleanup(rootfs, session_dir, image_path, sock_path, container_id);
     return 0;
 }

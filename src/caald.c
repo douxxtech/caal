@@ -37,16 +37,16 @@
 #include "lib/tomlc17.h"
 
 typedef struct {
-    char   username[CAALD_MAX_STR];
-    char   container_id[CAALD_MAX_STR];
-    pid_t  pid;
+    char username[CAALD_MAX_STR];
+    char container_id[CAALD_MAX_STR];
+    pid_t pid;
     time_t start_time;
-    int    active;
+    int active;
 } session_t;
 
-static session_t *sessions     = NULL;
-static int        session_count = 0;
-static int        max_sessions  = 0;
+static session_t *sessions = NULL;
+static int session_count = 0;
+static int max_sessions = 0;
 
 /* logging */
 static void log_event(const char *event, const char *username,
@@ -106,17 +106,18 @@ static void handle_register(const caald_request_t *req,
     if (!s) {
         if (session_count >= max_sessions) {
             resp->ok = 0;
-            strncpy(resp->error, "max sessions reached", sizeof(resp->error) - 1);
+            strncpy(resp->error, "max sessions reached",
+                    sizeof(resp->error) - 1);
             return;
         }
         s = &sessions[session_count++];
     }
 
-    strncpy(s->username, req->username, sizeof(s->username) - 1);
-    strncpy(s->container_id, req->container_id, sizeof(s->container_id) - 1);
-    s->pid        = (pid_t)req->pid;
+    snprintf(s->username, sizeof(s->username), "%s", req->username);
+    snprintf(s->container_id, sizeof(s->container_id), "%s", req->container_id);
+    s->pid = (pid_t)req->pid;
     s->start_time = time(NULL);
-    s->active     = 1;
+    s->active = 1;
 
     log_event("SESSION_START", s->username, s->container_id);
     resp->ok = 1;
@@ -134,7 +135,7 @@ static void handle_unregister(const caald_request_t *req,
 
     log_event("SESSION_END", s->username, s->container_id);
     s->active = 0;
-    resp->ok  = 1;
+    resp->ok = 1;
 }
 
 /* count active sessions */
@@ -144,7 +145,7 @@ static void handle_count(caald_response_t *resp) {
         if (sessions[i].active)
             count++;
     }
-    resp->ok    = 1;
+    resp->ok = 1;
     resp->count = count;
 }
 
@@ -157,7 +158,7 @@ static void handle_list(int client_fd, caald_response_t *resp) {
             count++;
     }
 
-    resp->ok    = 1;
+    resp->ok = 1;
     resp->count = count;
 
     /* send the response header first */
@@ -169,10 +170,11 @@ static void handle_list(int client_fd, caald_response_t *resp) {
             continue;
 
         caald_session_info_t info = {0};
-        strncpy(info.username, sessions[i].username, sizeof(info.username) - 1);
-        strncpy(info.container_id, sessions[i].container_id,
-                sizeof(info.container_id) - 1);
-        info.pid        = (int32_t)sessions[i].pid;
+        snprintf(info.username, sizeof(info.username), "%s",
+                 sessions[i].username);
+        snprintf(info.container_id, sizeof(info.container_id), "%s",
+                 sessions[i].container_id);
+        info.pid = (int32_t)sessions[i].pid;
         info.start_time = (int64_t)sessions[i].start_time;
 
         write_all(client_fd, &info, sizeof(info));
@@ -194,7 +196,7 @@ static void handle_kill(const caald_request_t *req, caald_response_t *resp) {
     kill(s->pid, SIGTERM);
     log_event("SESSION_KILLED", s->username, s->container_id);
     s->active = 0;
-    resp->ok  = 1;
+    resp->ok = 1;
 }
 
 /* kill all sessions for a user */
@@ -216,7 +218,7 @@ static void handle_kill_user(const caald_request_t *req,
         resp->ok = 0;
         strncpy(resp->error, "no sessions found", sizeof(resp->error) - 1);
     } else {
-        resp->ok    = 1;
+        resp->ok = 1;
         resp->count = killed;
     }
 }

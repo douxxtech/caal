@@ -158,14 +158,14 @@ int main(void) {
      * Read the session disk size in gigabytes.
      * Defaults to 1GB if not set or zero.
      */
-    char session_size_path[128];
-    snprintf(session_size_path, sizeof(session_size_path), "%s.session_size",
+    char disk_size_path[128];
+    snprintf(disk_size_path, sizeof(disk_size_path), "%s.disk_size",
              username);
-    toml_datum_t session_size_datum =
-        toml_seek(config.toptab, session_size_path);
-    int64_t session_size_gb = 1; /* default to 1GB */
-    if (session_size_datum.type == TOML_INT64 && session_size_datum.u.int64 > 0)
-        session_size_gb = session_size_datum.u.int64;
+    toml_datum_t disk_size_datum =
+        toml_seek(config.toptab, disk_size_path);
+    int64_t disk_size_gb = 1; /* default to 1GB */
+    if (disk_size_datum.type == TOML_INT64 && disk_size_datum.u.int64 > 0)
+        disk_size_gb = disk_size_datum.u.int64;
 
     /*
      * Nuke the entire environment before we launch crun.
@@ -211,8 +211,8 @@ int main(void) {
     snprintf(work, sizeof(work), SESSION_DIR "/%s/work", container_id);
     snprintf(rootfs, sizeof(rootfs), "%s/rootfs", bundle_path);
 
-    if (session_disk_setup(session_dir, image_path, session_size_gb) != 0) {
-        write(STDERR_FILENO, "[CaaLsh] session disk setup failed\n", 33);
+    if (session_disk_setup(session_dir, image_path, disk_size_gb) != 0) {
+        write(STDERR_FILENO, "[CaaLsh] session disk setup failed\n", 35);
         toml_free(config);
         return 1;
     }

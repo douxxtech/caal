@@ -318,7 +318,7 @@ int main(void) {
     if (daemon_fd >= 0) {
         if (!caald_session_register(daemon_fd, username, container_id,
                                     getpid())) {
-            fprintf(stderr, "[CaaLsh] daemon register failed\n");
+            fprintf(stderr, "[CaaLsh] daemon register failed (is it running?)\n");
         }
         close(daemon_fd);
     }
@@ -327,7 +327,8 @@ int main(void) {
         timer_pid = fork();
         if (timer_pid == 0) {
             sleep((unsigned int)timeout);
-            kill(child_pid, SIGTERM);
+            kill(getppid(),
+                 SIGTERM);
             _exit(0);
         }
     }

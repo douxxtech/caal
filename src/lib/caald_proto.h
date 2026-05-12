@@ -10,7 +10,6 @@
 #include <sys/types.h>
 #include <time.h>
 
-#define CAALD_SOCK_PATH "/run/caald.sock"
 #define CAALD_MAX_STR 64
 
 /* message types */

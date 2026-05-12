@@ -11,6 +11,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "../config.h"
+
 int caald_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)

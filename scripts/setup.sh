@@ -125,8 +125,9 @@ create_default_bundle() {
 # Format:
 # [<user>]
 # bundle = /full/path/to/bundle
-# timeout = timeout_seconds # 0 = no timeout
-# enabled = true|false
+# timeout = timeout_seconds      # 0 = no timeout (default)
+# disk = disk_size_mb            # defaults to 1024 MB
+# enabled = true|false           # defaults to true
 
 EOF
     else

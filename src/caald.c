@@ -184,7 +184,10 @@ static void handle_list(int client_fd, caald_response_t *resp) {
     resp->ok = 0;
 }
 
-/* kill a session by container_id */
+/* 
+ * kill a session by container_id
+ * right now, it is optimistic. Maybe add verification another time
+ */
 static void handle_kill(const caald_request_t *req, caald_response_t *resp) {
     session_t *s = find_session(req->container_id);
     if (!s) {

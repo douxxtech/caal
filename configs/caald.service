@@ -9,6 +9,7 @@ User=root
 PIDFile=/run/caald.pid
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=10
 
 [Install]
 WantedBy=multi-user.target

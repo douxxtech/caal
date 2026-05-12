@@ -89,7 +89,7 @@ int pty_bridge_recv(int sock_fd) {
         .msg_controllen = sizeof(cmsg_buf),
     };
 
-    if (recvmsg(conn_fd, &msg, 0) < 0) {
+    if (recvmsg(conn_fd, &msg, MSG_WAITALL) < 0) {
         close(conn_fd);
         return -1;
     }

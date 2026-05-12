@@ -274,6 +274,7 @@ main() {
         bundle="$DEFAULT_BUNDLE"
         timeout="$DEFAULT_TIMEOUT"
         enabled="$DEFAULT_ENABLED"
+        disk_size="$DEFAULT_DISK_SIZE"
         log INFO "Using defaults for '$username' (-y)"
     else
         ask "OCI bundle path" "$DEFAULT_BUNDLE"

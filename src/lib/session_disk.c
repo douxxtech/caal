@@ -81,7 +81,7 @@ void session_disk_cleanup(const char *session_dir, const char *image_path) {
 
     pid_t p = fork();
     if (p == 0) {
-        char *const argv[] = {"/bin/rm", "-rf", (char *)session_dir, NULL};
+        char *const argv[] = {"rm", "-rf", (char *)session_dir, NULL};
         execvp("rm", argv);
         _exit(1);
     }

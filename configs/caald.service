@@ -1,5 +1,5 @@
 [Unit]
-Description=CaaLd - Container as a Login Shell Daemon
+Description=CaaLd - Container as a Login Daemon
 After=network.target
 
 [Service]

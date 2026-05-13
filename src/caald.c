@@ -1,5 +1,5 @@
 /*
- * CaaLd - Container as a Login Shell Daemon
+ * CaaLd - Container as a Login Daemon
  * Copyright (C) 2026 douxxtech
  *
  * This program is free software: you can redistribute it and/or modify

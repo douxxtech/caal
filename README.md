@@ -8,7 +8,7 @@
 > CaaL provides disposable SSH login environments using OCI containers. Users connect with a normal SSH client and get a fresh, isolated shell that is destroyed when the session ends. No VMs, no persistent state, and minimal host setup required.
 
 <div align="center">
-<img src="https://images.dbo.one/b7415449" alt="demo" width="500">
+<img src="https://images.dbo.one/50728f0d" alt="demo" width="500">
 </div>
 
 ## How It Works

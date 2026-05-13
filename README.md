@@ -329,11 +329,11 @@ sudo newcaal fedora
 
 Log in and do some real work: authenticate with GitHub, clone a repo, make [a commit](https://github.com/douxxtech/caal/commit/4c2578b44e18faf35e00cadc192d0255504ca009), and push it:
 
-<img src="https://images.dbo.one/af1dc6ee" alt="Session demo" width="500" align="center">
+<div align="center"><img src="https://images.dbo.one/af1dc6ee" alt="Session demo" width="500"></div>
 
 Then log out and log back in. The session is fully ephemeral: no `~/.config/gh` auth, no cloned repo, nothing persists:
 
-<img src="https://images.dbo.one/ad39d7b0" alt="Session demo 2" width="500" align="center">
+<div align="center"><img src="https://images.dbo.one/ad39d7b0" alt="Session demo 2" width="500"></div>
 
 Each session starts from the same clean image. The disk, any installed tools, cloned repos, and credentials are all wiped on logout. The next session gets a fresh environment identical to the first.
 

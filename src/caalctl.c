@@ -1,5 +1,5 @@
 /*
- * CaaLctl - Container as a Login Control
+ * CaaLctl - Container as a Login Shell Control
  * Copyright (C) 2026 douxxtech
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,6 +25,9 @@
 #include "config.h"
 #include "lib/caald_client.h"
 
+/*
+ * Print the command summary to stderr.
+ */
 static void usage(const char *prog) {
     fprintf(stderr,
             "Usage: %s <command> [args]\n"
@@ -37,6 +40,10 @@ static void usage(const char *prog) {
             prog);
 }
 
+/*
+ * Fetch and print all active sessions from the daemon.
+ * Columns: username, container ID, PID, start time.
+ */
 static int cmd_list(int fd) {
     caald_session_info_t sessions[1024];
 
@@ -51,7 +58,6 @@ static int cmd_list(int fd) {
         return 0;
     }
 
-    /* header */
     printf("%-20s %-30s %-8s %s\n", "USERNAME", "CONTAINER ID", "PID",
            "STARTED");
     printf("%-20s %-30s %-8s %s\n", "--------", "------------", "---",
@@ -72,6 +78,9 @@ static int cmd_list(int fd) {
     return 0;
 }
 
+/*
+ * Print the number of active sessions to stdout.
+ */
 static int cmd_count(int fd) {
     int n = caald_session_count(fd);
     if (n < 0) {
@@ -82,6 +91,9 @@ static int cmd_count(int fd) {
     return 0;
 }
 
+/*
+ * Kill a single session by container ID.
+ */
 static int cmd_kill(int fd, const char *container_id) {
     if (!caald_session_kill(fd, container_id)) {
         fprintf(stderr, "[CaaLctl] failed to kill session '%s'\n",
@@ -92,6 +104,9 @@ static int cmd_kill(int fd, const char *container_id) {
     return 0;
 }
 
+/*
+ * Kill all active sessions owned by a user.
+ */
 static int cmd_killuser(int fd, const char *username) {
     if (!caald_session_kill_user(fd, username)) {
         fprintf(stderr, "[CaaLctl] failed to kill sessions for user '%s'\n",
@@ -110,7 +125,7 @@ int main(int argc, char *argv[]) {
 
     int fd = caald_connect();
     if (fd < 0) {
-        fprintf(stderr, "[CaaLctl] cannot connect to caald (is it running?)\n");
+        fprintf(stderr, "[CaaLctl] Cannot connect to caald (is it running?)\n");
         fprintf(stderr, "[CaaLctl] You may want to run this as root (sudo) if "
                         "you aren't already\n");
         return 1;

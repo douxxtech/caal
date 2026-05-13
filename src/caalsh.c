@@ -39,14 +39,16 @@
 #include "lib/session_disk.h"
 #include "lib/tomlc17.h"
 
-/* child pids, needs to be global so the signal handlers can reach them */
+/* child PIDs must be global so signal handlers can reach them */
 static pid_t child_pid = -1;
 static pid_t timer_pid = -1;
 
 /*
- * Cleanup. Unmount the overlay, tear down the session disk image, then
- * delete the container state via crun. Fork a child for crun delete so
- * we can wait on it and return cleanly.
+ * Tear down everything owned by this session.
+ *
+ * Unmounts the overlay filesystem, removes the session disk image,
+ * force-deletes the container state via crun, then unregisters the
+ * session from the daemon. Safe to call regardless of how the session ended.
  */
 static void cleanup(const char *rootfs, const char *session_dir,
                     const char *image_path, const char *sock_path,
@@ -55,6 +57,7 @@ static void cleanup(const char *rootfs, const char *session_dir,
     umount2(rootfs, MNT_DETACH);
     session_disk_cleanup(session_dir, image_path);
 
+    /* fork a child for crun delete so we can wait on it cleanly */
     pid_t p = fork();
     if (p == 0) {
         char *const argv[] = {CRUN_PATH, "delete", "--force",
@@ -72,7 +75,11 @@ static void cleanup(const char *rootfs, const char *session_dir,
     }
 }
 
-/* try to get session count from daemon, fall back to dir counting if it fails
+/*
+ * Return the number of currently active sessions.
+ *
+ * Queries the daemon first. Falls back to counting session directories under
+ * SESSION_DIR if the daemon is unavailable or returns an error.
  */
 static int count_active_sessions(void) {
     int fd = caald_connect();
@@ -81,11 +88,10 @@ static int count_active_sessions(void) {
         close(fd);
         if (count >= 0)
             return count;
-        /* daemon responded but gave error, warn and fall back */
         fprintf(stderr, "[CaaLsh] daemon query failed, falling back\n");
     }
 
-    /* daemon not available or failed, count dirs */
+    /* daemon not available; count caalsh-* directories as a best effort */
     DIR *d = opendir(SESSION_DIR);
     if (d == NULL)
         return 0;
@@ -101,7 +107,7 @@ static int count_active_sessions(void) {
 }
 
 int main(void) {
-    /* Figure out who we are */
+    /* resolve the uid to a username */
     struct passwd *pw = getpwuid(getuid());
     if (pw == NULL) {
         fprintf(stderr, "[CaaLsh] could not resolve user\n");
@@ -109,16 +115,15 @@ int main(void) {
     }
     const char *username = pw->pw_name;
 
-    /* sanity cap before we use username in any snprintf below */
+    /* sanity cap before username is used in any snprintf below */
     if (strlen(username) > 32) {
         fprintf(stderr, "[CaaLsh] username too long\n");
         return 1;
     }
 
     /*
-     * Open and parse the main config file;
-     * Every user that is allowed to log in must have a section in there.
-     * No section = No access
+     * Parse the main config file. Every user that is allowed to log in must
+     * have a section in there. No section means no access.
      */
     FILE *fp = fopen(CONFIG_PATH, "r");
     if (fp == NULL) {
@@ -133,10 +138,7 @@ int main(void) {
         return 1;
     }
 
-    /*
-     * Read global max_sessions.
-     * zero or missing means unlimited
-     */
+    /* zero or missing max_sessions means unlimited */
     toml_datum_t max_sess_datum = toml_seek(config.toptab, "max_sessions");
     int64_t max_sessions = 0;
     if (max_sess_datum.type == TOML_INT64)
@@ -149,8 +151,8 @@ int main(void) {
     }
 
     /*
-     * Look up [username].bundle using dot path syntax.
-     * This is the OCI bundle directory crun will be pointed at
+     * Look up [username].bundle. This is the OCI bundle directory crun will
+     * be pointed at. The path must be absolute.
      */
     char seek_path[128];
     snprintf(seek_path, sizeof(seek_path), "%s.bundle", username);
@@ -169,14 +171,13 @@ int main(void) {
 
     const char *bundle_path = bundle_datum.u.s;
 
-    /* relative paths are a footgun, require absolute only */
     if (bundle_path[0] != '/') {
         fprintf(stderr, "[CaaLsh] bundle path must be absolute\n");
         toml_free(config);
         return 1;
     }
 
-    /* Check the enabled flag. If it is explicitly set to false we bail out */
+    /* explicitly disabled users are rejected before anything else runs */
     char enabled_path[128];
     snprintf(enabled_path, sizeof(enabled_path), "%s.enabled", username);
     toml_datum_t enabled_datum = toml_seek(config.toptab, enabled_path);
@@ -186,10 +187,7 @@ int main(void) {
         return 1;
     }
 
-    /*
-     * Read the session timeout in seconds.
-     * Zero or missing means no timeout
-     */
+    /* zero or missing timeout means no limit */
     char timeout_path[128];
     snprintf(timeout_path, sizeof(timeout_path), "%s.timeout", username);
     toml_datum_t timeout_datum = toml_seek(config.toptab, timeout_path);
@@ -197,21 +195,17 @@ int main(void) {
     if (timeout_datum.type == TOML_INT64)
         timeout = timeout_datum.u.int64;
 
-    /*
-     * Read the session disk size in gigabytes.
-     * Defaults to 1GB if not set or zero.
-     */
+    /* disk size in megabytes; defaults to 1 GB if not set or zero */
     char disk_size_path[128];
     snprintf(disk_size_path, sizeof(disk_size_path), "%s.disk", username);
     toml_datum_t disk_size_datum = toml_seek(config.toptab, disk_size_path);
-    int64_t disk_size_mb = 1024; /* default to 1GB */
+    int64_t disk_size_mb = 1024;
     if (disk_size_datum.type == TOML_INT64 && disk_size_datum.u.int64 > 0)
         disk_size_mb = disk_size_datum.u.int64;
 
     /*
-     * Nuke the entire environment before we launch crun.
-     * We dont want any SSH injected vars or sshd state leaking into
-     * the container.
+     * Wipe the entire environment before launching crun. SSH-injected vars
+     * and sshd state must not leak into the container.
      */
     if (clearenv() != 0) {
         fprintf(stderr, "[CaaLsh] clearenv failed\n");
@@ -219,10 +213,7 @@ int main(void) {
         return 1;
     }
 
-    /*
-     * Give crun the minimum it needs to run.
-     * Nothing from the original env survives past this point.
-     */
+    /* give crun the bare minimum PATH it needs; nothing else survives */
     if (setenv("PATH",
                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                1)) {
@@ -231,7 +222,7 @@ int main(void) {
         return 1;
     }
 
-    /* Build a unique container ID using our PID and current timestamp */
+    /* unique container ID scoped to this PID and timestamp */
     char container_id[64];
     snprintf(container_id, sizeof(container_id), "caalsh-%d-%ld", (int)getpid(),
              (long)time(NULL));
@@ -239,10 +230,10 @@ int main(void) {
     /*
      * Set up the per-session overlay filesystem.
      *
-     * We create a loop-mounted ext4 image under SESSION_DIR and use it as
-     * the overlay scratch space. upper gets all the writes, work is required
-     * by overlayfs. When the session ends the image is unmounted and deleted,
-     * so the container rootfs is always clean for the next login.
+     * A loop-mounted ext4 image under SESSION_DIR provides the upper and work
+     * directories. The bundle rootfs is the read-only lower layer. All writes
+     * go to the loop image and are discarded when the session ends, leaving
+     * the rootfs clean for the next login.
      */
     char session_dir[128], image_path[128], upper[160], work[160], rootfs[128];
     snprintf(session_dir, sizeof(session_dir), SESSION_DIR "/%s", container_id);
@@ -258,11 +249,6 @@ int main(void) {
         return 1;
     }
 
-    /*
-     * Mount the overlay. The loop-mounted image provides upper and work,
-     * the bundle rootfs is the read-only lower layer. All writes go to the
-     * loop image and are discarded when the session ends.
-     */
     char overlay_opts[512];
     snprintf(overlay_opts, sizeof(overlay_opts),
              "lowerdir=%s,upperdir=%s,workdir=%s", rootfs, upper, work);
@@ -274,7 +260,7 @@ int main(void) {
         return 1;
     }
 
-    /* set up the console socket so crun can hand us the PTY master */
+    /* console socket lets crun hand us the PTY master fd */
     char sock_path[108];
     int sock_fd = pty_bridge_init(sock_path, sizeof(sock_path));
     if (sock_fd < 0) {
@@ -284,17 +270,14 @@ int main(void) {
     }
 
     /*
-     * Fork here. The child execs into crun and becomes the container process.
-     * The parent waits for it to finish, then handles cleanup (unmounts,
-     * session disk removal, crun delete).
-     *
-     * We do it this way instead of just execv so we can always run cleanup,
-     * regardless of how the session ends.
+     * Fork. The child execs into crun and becomes the container process.
+     * The parent waits for it to finish, then runs cleanup unconditionally,
+     * regardless of how the session ended.
      */
     pid_t pid = fork();
 
     if (pid == 0) {
-        /* child: hand off to crun, we are done here */
+        /* child: exec into crun, replacing this process image */
         char *const argv[] = {
             CRUN_PATH,          "run",     "--bundle",   (char *)bundle_path,
             "--console-socket", sock_path, container_id, NULL};
@@ -308,12 +291,9 @@ int main(void) {
         return 1;
     }
 
-    /*
-     * Parent: arm the timeout process if one was configured, then block on the
-     * child.
-     */
     child_pid = pid;
 
+    /* register the session with the daemon if it is available */
     int daemon_fd = caald_connect();
     if (daemon_fd >= 0) {
         if (!caald_session_register(daemon_fd, username, container_id,
@@ -324,8 +304,12 @@ int main(void) {
         close(daemon_fd);
     }
 
+    /*
+     * Arm the timeout process if one was configured. When the timer expires
+     * it sends SIGTERM to the parent (us), which forces the session to end.
+     */
     if (timeout > 0) {
-        pid_t ppid = getppid();
+        pid_t ppid = getpid();
         timer_pid = fork();
         if (timer_pid == 0) {
             sleep((unsigned int)timeout);

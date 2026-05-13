@@ -48,14 +48,19 @@ static session_t *sessions = NULL;
 static int session_count = 0;
 static int max_sessions = 0;
 
-/* logging */
+/*
+ * Write a structured session event to syslog.
+ */
 static void log_event(const char *event, const char *username,
                       const char *container_id) {
     syslog(LOG_INFO, "[CaaLd] %s user=%s container=%s", event, username,
            container_id);
 }
 
-/* send exactly n bytes, retrying on partial writes */
+/*
+ * Write exactly n bytes to fd, retrying on partial writes.
+ * Returns true on success, false if the write fails or the fd closes early.
+ */
 static bool write_all(int fd, const void *buf, size_t n) {
     const char *p = buf;
     while (n > 0) {
@@ -68,7 +73,10 @@ static bool write_all(int fd, const void *buf, size_t n) {
     return true;
 }
 
-/* read exactly n bytes, retrying on partial reads */
+/*
+ * Read exactly n bytes from fd, retrying on partial reads.
+ * Returns true on success, false if the read fails or the fd closes early.
+ */
 static bool read_all(int fd, void *buf, size_t n) {
     char *p = buf;
     while (n > 0) {
@@ -81,7 +89,10 @@ static bool read_all(int fd, void *buf, size_t n) {
     return true;
 }
 
-/* find a session by container_id */
+/*
+ * Look up an active session by container ID.
+ * Returns a pointer into the sessions table, or NULL if not found.
+ */
 static session_t *find_session(const char *container_id) {
     for (int i = 0; i < session_count; i++) {
         if (sessions[i].active &&
@@ -91,10 +102,14 @@ static session_t *find_session(const char *container_id) {
     return NULL;
 }
 
-/* register a new session */
+/*
+ * Register a new session in the table.
+ *
+ * Reuses the first inactive slot before appending a new one. Fails if the
+ * session table is already at capacity.
+ */
 static void handle_register(const caald_request_t *req,
                             caald_response_t *resp) {
-    /* reuse an inactive slot before appending */
     session_t *s = NULL;
     for (int i = 0; i < session_count; i++) {
         if (!sessions[i].active) {
@@ -123,7 +138,10 @@ static void handle_register(const caald_request_t *req,
     resp->ok = 1;
 }
 
-/* unregister a session */
+/*
+ * Mark a session as inactive.
+ * Fails if no active session matches the given container ID.
+ */
 static void handle_unregister(const caald_request_t *req,
                               caald_response_t *resp) {
     session_t *s = find_session(req->container_id);
@@ -138,7 +156,9 @@ static void handle_unregister(const caald_request_t *req,
     resp->ok = 1;
 }
 
-/* count active sessions */
+/*
+ * Return the number of currently active sessions.
+ */
 static void handle_count(caald_response_t *resp) {
     int count = 0;
     for (int i = 0; i < session_count; i++) {
@@ -149,9 +169,14 @@ static void handle_count(caald_response_t *resp) {
     resp->count = count;
 }
 
-/* list all active sessions */
+/*
+ * Stream all active sessions to the client.
+ *
+ * Sends the response header first with the session count, then streams each
+ * session struct individually. Sets resp->ok to 0 before returning to signal
+ * to the caller that the response has already been sent.
+ */
 static void handle_list(int client_fd, caald_response_t *resp) {
-    /* count first so we can fill resp->count before sending */
     int count = 0;
     for (int i = 0; i < session_count; i++) {
         if (sessions[i].active)
@@ -161,10 +186,8 @@ static void handle_list(int client_fd, caald_response_t *resp) {
     resp->ok = 1;
     resp->count = count;
 
-    /* send the response header first */
     write_all(client_fd, resp, sizeof(*resp));
 
-    /* then stream the session structs */
     for (int i = 0; i < session_count; i++) {
         if (!sessions[i].active)
             continue;
@@ -184,9 +207,12 @@ static void handle_list(int client_fd, caald_response_t *resp) {
     resp->ok = 0;
 }
 
-/* 
- * kill a session by container_id
- * right now, it is optimistic. Maybe add verification another time
+/*
+ * Send SIGTERM to a session process and mark it inactive.
+ *
+ * The kill is optimistic: we signal the PID and mark the slot inactive without
+ * waiting for the process to actually exit.
+ * TODO: add verification that the process has exited before marking inactive.
  */
 static void handle_kill(const caald_request_t *req, caald_response_t *resp) {
     session_t *s = find_session(req->container_id);
@@ -202,7 +228,11 @@ static void handle_kill(const caald_request_t *req, caald_response_t *resp) {
     resp->ok = 1;
 }
 
-/* kill all sessions for a user */
+/*
+ * Send SIGTERM to all active sessions owned by a user.
+ * Fails if the user has no active sessions. Sets resp->count to the number
+ * of sessions that were killed.
+ */
 static void handle_kill_user(const caald_request_t *req,
                              caald_response_t *resp) {
     int killed = 0;
@@ -226,7 +256,13 @@ static void handle_kill_user(const caald_request_t *req,
     }
 }
 
-/* process a client message */
+/*
+ * Dispatch a single client request and send the response.
+ *
+ * Reads one caald_request_t from the client fd, routes it to the appropriate
+ * handler, then writes back a caald_response_t. handle_list() sends its own
+ * response and sets resp->ok = 0 to suppress the second write here.
+ */
 static void handle_client(int client_fd) {
     caald_request_t req = {0};
     if (!read_all(client_fd, &req, sizeof(req)))
@@ -247,7 +283,7 @@ static void handle_client(int client_fd) {
         break;
     case CAALD_SESSION_LIST:
         handle_list(client_fd, &resp);
-        already_sent = true; /* handle_list sends its own response */
+        already_sent = true;
         break;
     case CAALD_SESSION_KILL:
         handle_kill(&req, &resp);
@@ -267,7 +303,7 @@ static void handle_client(int client_fd) {
 int main(void) {
     openlog("caald", LOG_PID | LOG_NDELAY, LOG_DAEMON);
 
-    /* ensure only one instance runs at a time */
+    /* flock on the pid file ensures only one instance runs at a time */
     int pid_fd = open(CAALD_PID_PATH, O_RDWR | O_CREAT, 0644);
     if (pid_fd < 0) {
         syslog(LOG_ERR, "could not open pid file");
@@ -288,13 +324,12 @@ int main(void) {
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
 
-    /* write our PID now that we've forked */
+    /* write our PID now that we have forked into the daemon process */
     char pidbuf[32];
     ftruncate(pid_fd, 0);
     snprintf(pidbuf, sizeof(pidbuf), "%d\n", (int)getpid());
     write(pid_fd, pidbuf, strlen(pidbuf));
 
-    /* create socket */
     int sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock_fd < 0) {
         syslog(LOG_ERR, "socket failed: %s", strerror(errno));
@@ -320,7 +355,7 @@ int main(void) {
 
     syslog(LOG_INFO, "caald started");
 
-    /* parse config to get max_sessions */
+    /* parse config to get max_sessions for the session table size */
     FILE *fp = fopen(CONFIG_PATH, "r");
     if (fp == NULL) {
         syslog(LOG_ERR, "could not open config");
@@ -348,7 +383,7 @@ int main(void) {
 
     toml_free(config);
 
-    /* accept loop */
+    /* accept loop: handle one client at a time */
     while (1) {
         int client_fd = accept(sock_fd, NULL, NULL);
         if (client_fd < 0)

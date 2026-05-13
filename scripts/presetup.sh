@@ -10,4 +10,5 @@ cd /tmp
 git clone --depth=1 --branch=main https://github.com/douxxtech/caal
 cd caal
 bash scripts/setup.sh
+cd ..
 rm -r caal

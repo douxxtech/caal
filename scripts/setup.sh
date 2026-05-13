@@ -110,7 +110,7 @@ install_service() {
 
     systemctl daemon-reload
 
-    read -r -p "Enable caald on boot? [y/N] " answer
+    read -r -p "Enable caald on boot? [y/N] " answer < /dev/tty
     if [[ "${answer,,}" == "y" ]]; then
         systemctl enable caald
         log INFO "caald enabled on boot"
@@ -118,7 +118,7 @@ install_service() {
         log INFO "caald not enabled on boot"
     fi
 
-    read -r -p "Start caald now? [y/N] " answer
+    read -r -p "Start caald now? [y/N] " answer < /dev/tty
     if [[ "${answer,,}" == "y" ]]; then
         systemctl start caald
         log INFO "caald started"

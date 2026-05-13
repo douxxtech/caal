@@ -65,14 +65,21 @@ static int cmd_list(int fd) {
 
     for (int i = 0; i < n; i++) {
         char timebuf[32];
+        char upbuf[32];
 
         time_t start_time = (time_t)sessions[i].start_time;
         struct tm *tm = localtime(&start_time);
-
         strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", tm);
 
-        printf("%-20s %-30s %-8d %s\n", sessions[i].username,
-               sessions[i].container_id, (int)sessions[i].pid, timebuf);
+        /* compute uptime as elapsed seconds since start */
+        time_t elapsed = time(NULL) - start_time;
+        int h = elapsed / 3600;
+        int m = (elapsed % 3600) / 60;
+        int s = elapsed % 60;
+        snprintf(upbuf, sizeof(upbuf), "(%02dh%02dm%02ds up)", h, m, s);
+
+        printf("%-20s %-30s %-8d %s %s\n", sessions[i].username,
+               sessions[i].container_id, (int)sessions[i].pid, timebuf, upbuf);
     }
 
     return 0;

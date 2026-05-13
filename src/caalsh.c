@@ -60,9 +60,9 @@ static void cleanup(const char *rootfs, const char *session_dir,
     /* fork a child for crun delete so we can wait on it cleanly */
     pid_t p = fork();
     if (p == 0) {
-        char *const argv[] = {CRUN_PATH, "delete", "--force",
+        char *const argv[] = {"crun", "delete", "--force",
                               (char *)container_id, NULL};
-        execv(CRUN_PATH, argv);
+        execvp("crun", argv);
         _exit(1);
     }
     if (p > 0)
@@ -279,9 +279,9 @@ int main(void) {
     if (pid == 0) {
         /* child: exec into crun, replacing this process image */
         char *const argv[] = {
-            CRUN_PATH,          "run",     "--bundle",   (char *)bundle_path,
+            "crun",          "run",     "--bundle",   (char *)bundle_path,
             "--console-socket", sock_path, container_id, NULL};
-        execv(CRUN_PATH, argv);
+        execvp("crun", argv);
         fprintf(stderr, "[CaaLsh] exec failed\n");
         _exit(1);
     } else if (pid < 0) {

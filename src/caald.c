@@ -44,6 +44,7 @@ typedef struct {
     int active;
 } session_t;
 
+static volatile sig_atomic_t g_reload_config = 0;
 static session_t *sessions = NULL;
 static int session_count = 0;
 static int max_sessions = 0;
@@ -87,6 +88,68 @@ static bool read_all(int fd, void *buf, size_t n) {
         n -= r;
     }
     return true;
+}
+
+/* reload config on SIGHUP */
+static void on_sighup(int sig) {
+    (void)sig;
+    g_reload_config = 1;
+}
+
+/*
+ * Re-read max_sessions from the config file.
+ * Does not shrink the session table, only grows it if the new value
+ * is higher than what was allocated, so active sessions are never lost.
+ */
+static void reload_config(void) {
+    FILE *fp = fopen(CONFIG_PATH, "r");
+    if (fp == NULL) {
+        syslog(LOG_ERR, "[reload] could not open config");
+        return;
+    }
+
+    toml_result_t config = toml_parse_file(fp);
+    fclose(fp);
+    if (!config.ok) {
+        syslog(LOG_ERR,
+               "[reload] could not parse config, keeping current values");
+        return;
+    }
+
+    toml_datum_t datum = toml_seek(config.toptab, "max_sessions");
+    int new_max = (datum.type == TOML_INT64 && datum.u.int64 > 0)
+                      ? (int)datum.u.int64
+                      : 1024;
+
+    toml_free(config);
+
+    if (new_max == max_sessions) {
+        syslog(LOG_INFO, "[reload] max_sessions unchanged (%d)", max_sessions);
+        return;
+    }
+
+    if (new_max < max_sessions) {
+        /* don't shrink since active sessions could be in the slots we'd free */
+        syslog(LOG_WARNING,
+               "[reload] new max_sessions (%d) is lower than current (%d), "
+               "ignoring shrink",
+               new_max, max_sessions);
+        return;
+    }
+
+    session_t *new_table = realloc(sessions, new_max * sizeof(session_t));
+    if (!new_table) {
+        syslog(LOG_ERR, "[reload] realloc failed, keeping current table");
+        return;
+    }
+
+    /* zero out the newly added slots */
+    memset(new_table + max_sessions, 0,
+           (new_max - max_sessions) * sizeof(session_t));
+
+    sessions = new_table;
+    max_sessions = new_max;
+    syslog(LOG_INFO, "[reload] max_sessions updated to %d", max_sessions);
 }
 
 /*
@@ -355,39 +418,32 @@ int main(void) {
 
     syslog(LOG_INFO, "caald started");
 
-    /* parse config to get max_sessions for the session table size */
-    FILE *fp = fopen(CONFIG_PATH, "r");
-    if (fp == NULL) {
-        syslog(LOG_ERR, "could not open config");
-        return 1;
-    }
-
-    toml_result_t config = toml_parse_file(fp);
-    fclose(fp);
-    if (!config.ok) {
-        syslog(LOG_ERR, "could not parse config");
-        return 1;
-    }
-
-    toml_datum_t max_sess_datum = toml_seek(config.toptab, "max_sessions");
-    if (max_sess_datum.type == TOML_INT64 && max_sess_datum.u.int64 > 0)
-        max_sessions = (int)max_sess_datum.u.int64;
-    else
-        max_sessions = 1024;
-
-    sessions = calloc(max_sessions, sizeof(session_t));
+    reload_config();
     if (!sessions) {
         syslog(LOG_ERR, "failed to allocate session table");
         return 1;
     }
 
-    toml_free(config);
+    struct sigaction sa = {0};
+    sa.sa_handler = on_sighup;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGHUP, &sa, NULL);
 
     /* accept loop: handle one client at a time */
     while (1) {
+        if (g_reload_config) {
+            g_reload_config = 0;
+            reload_config();
+        }
+
         int client_fd = accept(sock_fd, NULL, NULL);
         if (client_fd < 0)
             continue;
+
+        /* drop any client that stalls for more than 5 seconds */
+        struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
         handle_client(client_fd);
         close(client_fd);

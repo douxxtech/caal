@@ -220,9 +220,6 @@ umoci unpack --image /tmp/alpine-oci:latest /opt/caal/bundles/alpine
 # bundle = "/opt/caal/bundles/alpine"
 ```
 
-### Demo (Creating a Fedora Bundle)
-*In progress...*
-
 The bundle directory must follow the [OCI Runtime Bundle spec](https://github.com/opencontainers/runtime-spec/blob/main/bundle.md): a `config.json` and a `rootfs/` directory.
 
 > [!NOTE]
@@ -235,6 +232,110 @@ The bundle directory must follow the [OCI Runtime Bundle spec](https://github.co
 > - Update other configurations such as hostname, namespaces, etc.
 >
 > The OCI config is at `/opt/caal/bundles/<image>/config.json`.
+
+## Creating a Fedora Bundle
+
+This demo walks through building a developer-focused Fedora bundle, creating a CaaL user for it, and showing ephemeral sessions in action.
+
+### 1. Pull and Unpack the Image
+
+```bash
+sudo skopeo copy docker://fedora:latest oci:/tmp/fedora-oci:latest
+sudo umoci unpack --image /tmp/fedora-oci:latest /opt/caal/bundles/fedora
+```
+
+### 2. Chroot to Configure the Bundle
+
+Mount the required pseudo-filesystems, then enter the rootfs:
+
+```bash
+ROOTFS="/opt/caal/bundles/fedora/rootfs"
+sudo mount --bind /dev "$ROOTFS/dev"
+sudo mount --bind /proc "$ROOTFS/proc"
+sudo mount --bind /sys "$ROOTFS/sys"
+sudo mount --bind /run "$ROOTFS/run"
+
+sudo chroot "$ROOTFS" /bin/bash
+```
+
+Tune DNF for faster installs:
+
+```bash
+tee /etc/dnf/dnf.conf > /dev/null <<'EOF'
+[main]
+gpgcheck=True
+installonly_limit=3
+clean_requirements_on_remove=True
+best=True
+skip_if_unavailable=True
+fastestmirror=True
+max_parallel_downloads=20
+keepcache=True
+deltarpm=False
+defaultyes=True
+EOF
+```
+
+Update and install a small developer toolset:
+
+```bash
+dnf update
+dnf install \
+  bash-completion btop curl nano fd-find fzf \
+  gcc gcc-c++ gh git htop iproute jq make \
+  neovim openssh-clients procps-ng python3 python3-pip \
+  ripgrep rsync strace tar tmux tree unzip \
+  util-linux vim wget which zip
+```
+
+Customize the shell environment (optional):
+
+```bash
+nano /root/.bashrc
+```
+
+Then exit the chroot and unmount:
+
+```bash
+exit
+
+sudo umount "$ROOTFS/dev"
+sudo umount "$ROOTFS/proc"
+sudo umount "$ROOTFS/sys"
+sudo umount "$ROOTFS/run"
+```
+
+### 3. Configure the OCI Bundle
+
+Edit `/opt/caal/bundles/fedora/config.json` and apply these changes:
+
+- **Remove** the network namespace entry from `linux.namespaces` – this gives the container access to the host network (needed for `git`, `gh`, etc.)
+- **Set** `hostname` to something like `fedodev`
+- **Set** `process.cwd` to `/root`
+- **Remove** `CAP_NET_BIND_SERVICE` from capabilities – users shouldn't bind privileged ports
+- **Add** `CAP_DAC_OVERRIDE` – required so the container can write files as expected
+- **Add** `linux.resources.cpu` and `linux.resources.memory` if you wish to apply cgroups limitations
+
+### 4. Create the CaaL User
+
+```bash
+sudo newcaal fedora
+# bundle: /opt/caal/bundles/fedora
+# timeout: 43200 (12 hours)
+# disk: 4096 (4 GB)
+```
+
+### 5. Session Demo
+
+Log in and do some real work: authenticate with GitHub, clone a repo, make [a commit](https://github.com/douxxtech/caal/commit/4c2578b44e18faf35e00cadc192d0255504ca009), and push it:
+
+![Session demo](https://images.dbo.one/af1dc6ee)
+
+Then log out and log back in. The session is fully ephemeral: no `~/.config/gh` auth, no cloned repo, nothing persists:
+
+![Session demo 2](https://images.dbo.one/ad39d7b0)
+
+Each session starts from the same clean image. The disk, any installed tools, cloned repos, and credentials are all wiped on logout. The next session gets a fresh environment identical to the first.
 
 ## Security Notes
 

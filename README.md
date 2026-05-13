@@ -220,6 +220,9 @@ umoci unpack --image /tmp/alpine-oci:latest /opt/caal/bundles/alpine
 # bundle = "/opt/caal/bundles/alpine"
 ```
 
+### Demo (Creating a Fedora Bundle)
+*In progress...*
+
 The bundle directory must follow the [OCI Runtime Bundle spec](https://github.com/opencontainers/runtime-spec/blob/main/bundle.md): a `config.json` and a `rootfs/` directory.
 
 > [!NOTE]

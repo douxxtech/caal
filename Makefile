@@ -25,10 +25,10 @@ all: $(CAALSH_OBJ) $(DAEMON_OBJ) $(CONTROLLER_OBJ)
 $(CAALSH_OBJ): $(CAALSH_SRC) $(SRC_DIR)/config.h
 	$(CC) $(CFLAGS) -I$(SRC_DIR) -o $@ $(CAALSH_SRC)
 
-$(DAEMON_OBJ): $(DAEMON_SRC) $(SRC_DIR)/lib/caald_proto.h
+$(DAEMON_OBJ): $(DAEMON_SRC) $(SRC_DIR)/config.h $(SRC_DIR)/lib/caald_proto.h 
 	$(CC) $(CFLAGS) -I$(SRC_DIR) -o $@ $(DAEMON_SRC)
 
-$(CONTROLLER_OBJ): $(CONTROLLER_SRC) $(SRC_DIR)/lib/caald_proto.h
+$(CONTROLLER_OBJ): $(CONTROLLER_SRC) $(SRC_DIR)/config.h $(SRC_DIR)/lib/caald_proto.h
 	$(CC) $(CFLAGS) -I$(SRC_DIR) -o $@ $(CONTROLLER_SRC)
 
 install: all

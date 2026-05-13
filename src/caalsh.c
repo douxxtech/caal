@@ -73,6 +73,8 @@ static void cleanup(const char *rootfs, const char *session_dir,
         caald_session_unregister(daemon_fd, container_id);
         close(daemon_fd);
     }
+
+    fprintf(stderr, "\n[CaaLsh] session cleaned up\n");
 }
 
 /*

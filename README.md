@@ -233,6 +233,44 @@ The bundle directory must follow the [OCI Runtime Bundle spec](https://github.co
 >
 > The OCI config is at `/opt/caal/bundles/<image>/config.json`.
 
+
+## Non-Shell Startup (Application Mode)
+
+By default, OCI bundles are usually configured to launch `/bin/sh` or `/bin/bash`. However, you can edit the bundle's `config.json` to make the container run a specific program as the "init" process. When that program exits, the container stops and the SSH session closes.
+
+Here is an example on how to turn a CaaL login into a dedicated `htop` monitor:
+
+1. Open the `config.json` for your bundle:
+`sudo nano /opt/caal/bundles/default/config.json`
+2. Locate the `process` object and modify the `args` array:
+
+```json
+"process": {
+  "terminal": true,
+  "user": {
+    "uid": 0,
+    "gid": 0
+  },
+  "args": [
+    "/usr/bin/htop"
+  ],
+  "env": [
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "TERM=xterm-256color"
+  ],
+  "cwd": "/"
+}
+
+```
+
+> [!TIP]
+> **Why do this?**
+> 
+> - **Restricted Access:** The user can only interact with the specified application. They cannot "break out" to a shell to explore the container filesystem unless the app itself has a shell-escape feature.
+> - **App-as-a-Service:** You can provide disposable instances of interactive CLI tools (like `psql`, `redis-cli`, or custom internal management scripts) over SSH.
+> - **Automatic Cleanup:** Since CaaL tears down the environment when the process exits, quitting the application (e.g., pressing `F10` in `htop`) automatically closes the SSH connection and wipes the session disk.
+
+
 ## Creating a Fedora Bundle
 
 This demo walks through building a developer-focused Fedora bundle, creating a CaaL user for it, and showing ephemeral sessions in action.

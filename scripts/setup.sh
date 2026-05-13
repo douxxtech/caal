@@ -151,12 +151,12 @@ create_default_bundle() {
         mkdir -p "$(dirname "$CONFIG_PATH")"
         cat "configs/caal.toml" > "$CONFIG_PATH"
 
-    log INFO "Creating sessions dir at $SESSIONS_DIR"
-    mkdir -p "$SESSIONS_DIR"
-
     else
         log WARN "$CONFIG_PATH already exists, skipping"
     fi
+
+    log INFO "Creating sessions dir at $SESSIONS_DIR"
+    mkdir -p "$SESSIONS_DIR"
 
     log INFO "Default bundle ready at $DEFAULT_BUNDLE"
 }

@@ -26,7 +26,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -35,47 +34,11 @@
 
 #include "config.h"
 #include "lib/caald_client.h"
+#include "lib/container.h"
 #include "lib/pty_bridge.h"
-#include "lib/session_disk.h"
 #include "lib/tomlc17.h"
 
-/* child PIDs must be global so signal handlers can reach them */
-static pid_t child_pid = -1;
 static pid_t timer_pid = -1;
-
-/*
- * Tear down everything owned by this session.
- *
- * Unmounts the overlay filesystem, removes the session disk image,
- * force-deletes the container state via crun, then unregisters the
- * session from the daemon. Safe to call regardless of how the session ended.
- */
-static void cleanup(const char *rootfs, const char *session_dir,
-                    const char *image_path, const char *sock_path,
-                    const char *container_id) {
-    unlink(sock_path);
-    umount2(rootfs, MNT_DETACH);
-    session_disk_cleanup(session_dir, image_path);
-
-    /* fork a child for crun delete so we can wait on it cleanly */
-    pid_t p = fork();
-    if (p == 0) {
-        char *const argv[] = {"crun", "delete", "--force",
-                              (char *)container_id, NULL};
-        execvp("crun", argv);
-        _exit(1);
-    }
-    if (p > 0)
-        waitpid(p, NULL, 0);
-
-    int daemon_fd = caald_connect();
-    if (daemon_fd >= 0) {
-        caald_session_unregister(daemon_fd, container_id);
-        close(daemon_fd);
-    }
-
-    fprintf(stderr, "\n[CaaLsh] session cleaned up\n");
-}
 
 /*
  * Return the number of currently active sessions.
@@ -229,109 +192,57 @@ int main(void) {
     snprintf(container_id, sizeof(container_id), "caalsh-%d-%ld", (int)getpid(),
              (long)time(NULL));
 
-    /*
-     * Set up the per-session overlay filesystem.
-     *
-     * A loop-mounted ext4 image under SESSION_DIR provides the upper and work
-     * directories. The bundle rootfs is the read-only lower layer. All writes
-     * go to the loop image and are discarded when the session ends, leaving
-     * the rootfs clean for the next login.
-     */
-    char session_dir[128], image_path[128], upper[160], work[160], rootfs[128];
-    snprintf(session_dir, sizeof(session_dir), SESSION_DIR "/%s", container_id);
-    snprintf(image_path, sizeof(image_path), SESSION_DIR "/%s.img",
-             container_id);
-    snprintf(upper, sizeof(upper), SESSION_DIR "/%s/upper", container_id);
-    snprintf(work, sizeof(work), SESSION_DIR "/%s/work", container_id);
-    snprintf(rootfs, sizeof(rootfs), "%s/rootfs", bundle_path);
+    /* the container, infos will be filled by container_start */
+    container_t ct = {0};
 
-    if (session_disk_setup(session_dir, image_path, disk_size_mb) != 0) {
-        fprintf(stderr, "[CaaLsh] session disk setup failed\n");
-        toml_free(config);
-        return 1;
-    }
-
-    char overlay_opts[512];
-    snprintf(overlay_opts, sizeof(overlay_opts),
-             "lowerdir=%s,upperdir=%s,workdir=%s", rootfs, upper, work);
-
-    if (mount("overlay", rootfs, "overlay", 0, overlay_opts) != 0) {
-        fprintf(stderr, "[CaaLsh] overlay mount failed\n");
-        session_disk_cleanup(session_dir, image_path);
-        toml_free(config);
-        return 1;
-    }
-
-    /* console socket lets crun hand us the PTY master fd */
-    char sock_path[108];
-    int sock_fd = pty_bridge_init(sock_path, sizeof(sock_path));
+    int sock_fd = container_start(&ct, bundle_path, disk_size_mb);
     if (sock_fd < 0) {
-        fprintf(stderr, "[CaaLsh] pty_bridge_init failed\n");
         toml_free(config);
         return 1;
     }
 
-    /*
-     * Fork. The child execs into crun and becomes the container process.
-     * The parent waits for it to finish, then runs cleanup unconditionally,
-     * regardless of how the session ended.
-     */
-    pid_t pid = fork();
-
-    if (pid == 0) {
-        /* child: exec into crun, replacing this process image */
-        char *const argv[] = {
-            "crun",          "run",     "--bundle",   (char *)bundle_path,
-            "--console-socket", sock_path, container_id, NULL};
-        execvp("crun", argv);
-        fprintf(stderr, "[CaaLsh] exec failed\n");
-        _exit(1);
-    } else if (pid < 0) {
-        fprintf(stderr, "[CaaLsh] fork failed\n");
-        cleanup(rootfs, session_dir, image_path, sock_path, container_id);
-        toml_free(config);
-        return 1;
-    }
-
-    child_pid = pid;
-
-    /* register the session with the daemon if it is available */
-    int daemon_fd = caald_connect();
-    if (daemon_fd >= 0) {
-        if (!caald_session_register(daemon_fd, username, container_id,
-                                    getpid())) {
-            fprintf(stderr,
-                    "[CaaLsh] daemon register failed (is it running?)\n");
-        }
-        close(daemon_fd);
-    }
-
-    /*
-     * Arm the timeout process if one was configured. When the timer expires
-     * it sends SIGTERM to the parent (us), which forces the session to end.
-     */
+    /* optional timeout watchdog */
     if (timeout > 0) {
         pid_t ppid = getpid();
         timer_pid = fork();
         if (timer_pid == 0) {
             sleep((unsigned int)timeout);
-            if (!kill(ppid, 0))
+            if (kill(ppid, 0) == 0)
                 kill(ppid, SIGTERM);
             _exit(0);
         }
     }
 
+    int daemon_fd = caald_connect();
+    if (daemon_fd >= 0) {
+        if (!caald_session_register(daemon_fd, username, ct.container_id,
+                                    getpid()))
+            fprintf(stderr,
+                    "[CaaLsh] daemon register failed (is it running?)\n");
+        close(daemon_fd);
+    }
+
     int master_fd = pty_bridge_recv(sock_fd);
     if (master_fd < 0) {
         fprintf(stderr, "[CaaLsh] pty_bridge_recv failed\n");
-        cleanup(rootfs, session_dir, image_path, sock_path, container_id);
+        container_stop(&ct);
+        toml_free(config);
         return 1;
     }
-    pty_bridge_run(master_fd, pid);
+
+    pty_bridge_run(master_fd, ct.child_pid);
 
     if (timer_pid > 0)
         kill(timer_pid, SIGKILL);
 
-    cleanup(rootfs, session_dir, image_path, sock_path, container_id);
+    daemon_fd = caald_connect();
+    if (daemon_fd >= 0) {
+        caald_session_unregister(daemon_fd, ct.container_id);
+        close(daemon_fd);
+    }
+
+    fprintf(stderr, "\n[CaaLsh] session cleaned up\n");
+
+    container_stop(&ct);
     return 0;
 }

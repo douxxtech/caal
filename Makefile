@@ -6,7 +6,7 @@ CFLAGS ?= -O2 -Wall -Wextra -pedantic
 PREFIX ?= /usr/local
 
 SRC_DIR = src
-CAALSH_SRC = $(SRC_DIR)/caalsh.c $(SRC_DIR)/lib/tomlc17.c $(SRC_DIR)/lib/pty_bridge.c $(SRC_DIR)/lib/session_disk.c $(SRC_DIR)/lib/caald_client.c
+CAALSH_SRC = $(SRC_DIR)/caalsh.c $(SRC_DIR)/lib/tomlc17.c $(SRC_DIR)/lib/container.c $(SRC_DIR)/lib/pty_bridge.c $(SRC_DIR)/lib/session_disk.c $(SRC_DIR)/lib/caald_client.c
 CAALSH_OBJ = caalsh
 
 DAEMON_SRC = $(SRC_DIR)/caald.c $(SRC_DIR)/lib/tomlc17.c
